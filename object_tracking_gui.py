@@ -336,7 +336,7 @@ class MainApp(QMainWindow):
         self.console = None
 
         self.pointer = QLabel(self)  # self.video_label
-        self.pointer.setFixedSize(10, 10)  # (0, 0)
+        self.pointer.setFixedSize(0, 0)  # (10, 10)
         self.pointer.setStyleSheet("background-color: red; border-radius: 5px;")
         #self.pointer.move(self.resized_frame_shape[0], self.resized_frame_shape[1])
         #self.pointer.move(0, 0)
@@ -367,11 +367,12 @@ class MainApp(QMainWindow):
     def mousePressEvent(self, event):
         if self.mouse_as_joystick:
             if event.button() == Qt.LeftButton:
+                self.click_on(event)
                 self.mouse_pressed = True
             elif event.button() == Qt.RightButton:
                 self.handle_joystick_button(0)
-        else:
-            self.click_on(event)
+        #else:
+        #    self.click_on(event)
 
 
     def click_on(self, event):
@@ -451,7 +452,7 @@ class MainApp(QMainWindow):
         self.pointer_pos[0] = max(-5, min(self.resized_frame_shape[1] - 5, self.pointer_pos[0]))
         self.pointer_pos[1] = max(-5, min(self.resized_frame_shape[0] - 5, self.pointer_pos[1]))
 
-        self.pointer_move(coord_x = int(self.pointer_pos[0]), coord_y = int(self.pointer_pos[1]))
+        self.pointer_move(coord_x = int(self.pointer_pos[0] + self.video_label_deviation[0]), coord_y = int(self.pointer_pos[1])+self.video_label_deviation[1])
 
         pointer_x = {'cursor_x': int(((self.pointer_pos[0] + 5) * self.scale_x))}
         pointer_y = {'cursor_y': int(((self.pointer_pos[1] + 5) * self.scale_y))}
