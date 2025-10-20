@@ -1,0 +1,22 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Old copies of files
+*_copy*.py
+
+# IDEs
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Environment files
+.env
