@@ -582,8 +582,6 @@ class MainApp(QMainWindow):
                     self.cursor_x = int(self.console.configs_window.track_coord_x / self.scale_x + self.video_label_deviation[0] + 5)
                     self.cursor_y = int(self.console.configs_window.track_coord_y / self.scale_y + self.video_label_deviation[1] + 5)
                     self.track_frame_size = self.console.configs_window.track_frame_size
-                    if self.console.configs_window.set_cursor_x and self.console.configs_window.set_cursor_y:
-                        self.pointer_move(self.console.configs_window.set_cursor_x, self.console.configs_window.set_cursor_y)
 
             if self.cursor_x is not None and self.cursor_y is not None:
                 x_start = int(max(1, self.cursor_x - self.track_frame_size[1] / 2 - self.video_label_deviation[0]))
@@ -1064,9 +1062,6 @@ class ConfigurationsWindow(QWidget):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.request_parameters_update)
 
-        self.set_cursor_x = None
-        self.set_cursor_y = None
-
         if configs_dict != {}:
             self.configs_dict = configs_dict
 
@@ -1148,10 +1143,6 @@ class ConfigurationsWindow(QWidget):
                     param_name == 'cursor_x' or param_name == 'cursor_y')) and configs[param_name] > 1980:
                 param = int(configs[param_name]) & 0x7FFF
                 fields[param_name].setText(str(param))
-                if param_name == 'cursor_x':
-                    self.set_cursor_x = param
-                elif param_name == 'cursor_y':
-                    self.set_cursor_y = param
             else:
                 fields[param_name].setText(str(configs[param_name]))
         track_frame_height = int(configs["track_fr_h"])
@@ -1206,6 +1197,9 @@ class ConfigurationsWindow(QWidget):
             if self.configs_dict[k] != self.buffer_configs[k]:
                 config_to_json = json.dumps({k:self.buffer_configs[k]})
                 self.ser_th.send_text_signal.emit(config_to_json)
+
+        coords_json = json.dumps({'cursor_x':self.buffer_configs['cursor_x'], 'cursor_y':self.buffer_configs['cursor_y']})
+        self.ser_th.send_text_signal.emit(coords_json)
 
         for i in self.configs_dict:
             self.configs_dict[i] = self.buffer_configs[i]
