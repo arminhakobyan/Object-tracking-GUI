@@ -696,6 +696,8 @@ class MainApp(QMainWindow):
             print("Couldn't connect")
             return False
 
+
+
     def connect_port(self):
         if not self.mouse_as_joystick:
             if self.port_connected and self.ser is not None and self.ser.is_open:
@@ -722,33 +724,74 @@ class MainApp(QMainWindow):
                     if check_port:
                         self.ser.write(bytes([0xFE]))
                         response = ""
-                        my_list = []
-                        time.sleep(0.3)
-                        while self.ser.in_waiting > 0:
-                            d = self.ser.read()
-                            my_list.append(d)
-                            time.sleep(0.01)
-                        for i in my_list:
-                            response += str(i.decode("utf-8"))
+                        attempt = 0
+                        while attempt < 10:
+                            attempt += 1
+                            time.sleep(0.5)
+                            my_list = []
 
-                        print("received", response)
-                        response = response.strip()
-                        js = json.loads(response)
-                        print(js['device_id'])
-                        if js['device_id'] == self.device_id:
-                            self.ser.write(bytes([0xFE]))
-                            # confirmation  = self.ser.read().decode().strip()
-                            confirmation = ""
-                            my_list1 = []
-                            time.sleep(0.3)
                             while self.ser.in_waiting > 0:
                                 d = self.ser.read()
-                                my_list1.append(d)
+                                my_list.append(d)
                                 time.sleep(0.01)
-                            for i in my_list1:
-                                confirmation += str(i.decode("utf-8"))
 
-                            if "Connected" in confirmation:
+                            if my_list:
+                                response = "".join([i.decode("utf-8", errors="ignore") for i in my_list]).strip()
+                                try:
+                                    js = json.loads(response)
+                                except json.JSONDecodeError:
+                                    response = ""  # reset so we know it's not valid yet
+                                    continue
+                                break
+                        if not response:
+                            print(f"No device id received after {attempt} attempts ({attempt * 0.5:.1f}s).")
+                            QMessageBox.warning(self, "Error", "Device did not confirm connection.")
+                            self.ser.close()
+                            try:
+                                self.connect_btn.setText("Connect")
+                            except Exception:
+                                pass
+                            return  # or raise/handle as you need
+
+                        print("received", response)
+                        js = json.loads(response)
+                        print(js.get('device_id'))
+
+                        if js.get('device_id') == self.device_id:
+                            self.ser.write(bytes([0xFE]))
+
+                            confirmation = ""
+                            attempt = 0
+                            while attempt < 10:
+                                attempt += 1
+                                time.sleep(0.5)
+                                my_list1 = []
+                                while self.ser.in_waiting > 0:
+                                    d = self.ser.read()
+                                    my_list1.append(d)
+                                    time.sleep(0.01)
+
+                                if my_list1:
+                                    confirmation = "".join(
+                                        [i.decode("utf-8", errors="ignore") for i in my_list1]).strip()
+
+                                    if "connected".lower() in confirmation.lower() or "Connected" in confirmation:
+                                        break
+                                    else:
+                                        # received data but not the confirmation text yet -> continue attempts
+                                        confirmation = ""
+                                        continue
+                            if not confirmation:
+                                print(f"No confirmation received after {attempt} attempts ({attempt * 0.5:.1f}s).")
+                                QMessageBox.warning(self, "Error", "Device did not confirm connection.")
+                                self.ser.close()
+                                try:
+                                    self.connect_btn.setText("Connect")
+                                except Exception:
+                                    pass
+                                return  # or raise/handle
+
+                            if "Connected" in confirmation or "connected" in confirmation.lower():
                                 self.connect_btn.setText("Disconnect")
                                 self.port_connected = True
                                 self.serial_thread = SerialThread(self.ser)
@@ -758,15 +801,6 @@ class MainApp(QMainWindow):
                                 self.console.show()
                                 self.joystick_thread.start()
 
-                            else:
-                                print("Device did not confirm connection.")
-                                QMessageBox.warning(self, "Error", "Device did not confirm connection.")
-                                self.ser.close()
-                        else:
-                            QMessageBox.warning(self, "Wrong Device", "Unexpected device ID.")
-                            self.ser.write(bytes([0xFE]))  # still send to end handshake
-                            self.ser.close()
-                            self.port_connection_messagebox.show()
                 except SerialException as e:
                     QMessageBox.critical(self, "Error", "Invalid port.")
                     print("Serial port error:", e)
@@ -781,7 +815,6 @@ class MainApp(QMainWindow):
                 except Exception as e:
                     print("Unexpected error:", e)
                     QMessageBox.critical(self, "Error", "Invalid response from device.")
-
                     if self.ser and self.ser.is_open:
                         self.ser.close()
 
