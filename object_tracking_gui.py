@@ -13,7 +13,6 @@ from serial import Serial
 from serial.tools import list_ports
 from serial import SerialException, SerialTimeoutException
 from threading import Thread
-from configs import Configurations
 from difflib import SequenceMatcher
 from functools import partial
 from ast import literal_eval
@@ -358,6 +357,8 @@ class MainApp(QMainWindow):
             self.mouse_as_joystick = not self.mouse_as_joystick
             print("Mouse joystick mode:", self.mouse_as_joystick)
 
+
+
     def mouseReleaseEvent(self, event):
         if self.mouse_as_joystick and event.button() == Qt.LeftButton:
             self.mouse_pressed = False
@@ -367,34 +368,23 @@ class MainApp(QMainWindow):
     def mousePressEvent(self, event):
         if self.mouse_as_joystick:
             if event.button() == Qt.LeftButton:
-                self.click_on(event)
+                #self.click_on(event)
+                mouse_x = event.x()
+                mouse_y = event.y()
+
+                target_x = mouse_x - 5 - self.video_label_deviation[0]
+                target_y = mouse_y - 5 - self.video_label_deviation[1]
+                dx = (target_x - self.pointer_pos[0]) / 5
+                dy = (target_y - self.pointer_pos[1]) / 5
+
+                self.send_joystick_coords(dx, dy)
                 self.mouse_pressed = True
             elif event.button() == Qt.RightButton:
                 self.handle_joystick_button(0)
-        #else:
-        #    self.click_on(event)
-
-
-    def click_on(self, event):
-        print("click_on_video")
-        if event.button() == Qt.LeftButton is not None:  # and self.video_thread
-            self.cursor_x = int(event.pos().x())
-            self.cursor_y = int(event.pos().y())
-            self.cursor_x_in_original_frame = int((event.pos().x() - self.video_label_deviation[0]) * self.scale_x)
-            self.cursor_y_in_original_frame = int((event.pos().y() - self.video_label_deviation[1]) * self.scale_y)
-            self.pointer_pos[0] = int(event.pos().x()) - self.video_label_deviation[0]
-            self.pointer_pos[1] = int(event.pos().y()) - self.video_label_deviation[1]
-
-            self.coords_in_original_frame = {"cursor_x": self.cursor_x_in_original_frame,
-                                             "cursor_y": self.cursor_y_in_original_frame}
-
-            self.coords_buffer.append(self.coords_in_original_frame)
-            self.send_buffer_coordinates(buffer=self.coords_buffer)
 
 
 
     def stop_joystick_motion(self, dx, dy):
-        print("stopped joystick")
         self.joystick_stopped = True
         pointer_x, pointer_y  = self.update_joystick_pointer(dx, dy)
         if self.serial_thread:
@@ -408,27 +398,9 @@ class MainApp(QMainWindow):
         print("started joystick")
         self.joystick_stopped = False
 
-    """
-    def mouseMoveEvent(self, event):
-        if self.mouse_as_joystick and event.buttons() & Qt.LeftButton:
-            center_x = self.width() / 2
-            center_y = self.height() / 2
-
-            # Simple proportional movement from center
-            dx = (event.x() - center_x) / center_x  # -1 to 1 range
-            dy = (event.y() - center_y) / center_y  # -1 to 1 range
-
-            # Optional: apply dead zone
-            dead_zone = 0.1
-            if abs(dx) < dead_zone: dx = 0
-            if abs(dy) < dead_zone: dy = 0
-
-            self.send_joystick_coords(dx, dy)
-    """
 
     def mouseMoveEvent(self, event):
         if self.mouse_as_joystick and event.buttons() & Qt.LeftButton:
-
             # Get mouse position relative to widget
             mouse_x = event.x()
             mouse_y = event.y()
@@ -462,8 +434,8 @@ class MainApp(QMainWindow):
 
         self.pointers_buffer.append(self.pointer_coord)
 
-
         return pointer_x, pointer_y
+
 
     def pointer_move(self, coord_x:int, coord_y:int):
         self.pointer.move(coord_x, coord_y)
@@ -481,7 +453,6 @@ class MainApp(QMainWindow):
                 if self.console.configs_window:
                     self.console.configs_window.change_parameter_value(x, "cursor_x")
                     self.console.configs_window.change_parameter_value(y, "cursor_y")
-
 
 
     def handle_joystick_button(self, i: int):
@@ -531,10 +502,10 @@ class MainApp(QMainWindow):
 
 
     def select_camera(self, ind):
-        if not self.mouse_as_joystick:
-            self.selected_camera = ind
-            print(self.available_cameras[self.selected_camera])
-            self.open_camera_button.setEnabled(True)
+        self.selected_camera = ind
+        print(self.available_cameras[self.selected_camera])
+        self.open_camera_button.setEnabled(True)
+
 
     def hide_loading(self):
         self.loading_movie.stop()
@@ -542,25 +513,24 @@ class MainApp(QMainWindow):
 
 
     def open_camera(self):
-        if not self.mouse_as_joystick:
-            self.camera_closed = False
-            self.start_button.setEnabled(True)
-            self.close_camera_button.setEnabled(True)
+        self.camera_closed = False
+        self.start_button.setEnabled(True)
+        self.close_camera_button.setEnabled(True)
 
-            if self.video_thread is not None:  # and self.video_thread.get_index() != self.available_cameras[self.selected_camera][1]:
-                self.video_thread.stop()
-                self.video_thread = None
+        if self.video_thread is not None:  # and self.video_thread.get_index() != self.available_cameras[self.selected_camera][1]:
+            self.video_thread.stop()
+            self.video_thread = None
 
-            ind = self.available_cameras[self.selected_camera][1]
-            api_pref = self.available_cameras[self.selected_camera][2]
+        ind = self.available_cameras[self.selected_camera][1]
+        api_pref = self.available_cameras[self.selected_camera][2]
 
-            self.video_thread = VideoCaptureThread(ind, api_pref)
+        self.video_thread = VideoCaptureThread(ind, api_pref)
 
-            self.video_thread.camera_ready_signal.connect(self.hide_loading)
-            self.video_thread.change_frame_signal.connect(self.update_frame)
+        self.video_thread.camera_ready_signal.connect(self.hide_loading)
+        self.video_thread.change_frame_signal.connect(self.update_frame)
 
-            self.video_thread.start()
-            #self.joystick_thread.start()
+        self.video_thread.start()
+        #self.joystick_thread.start()
 
 
     @pyqtSlot(np.ndarray)
@@ -615,25 +585,23 @@ class MainApp(QMainWindow):
 
 
     def start_recording(self):
-        if not self.mouse_as_joystick:
-            self.is_recording = True
-            self.open_camera_button.setEnabled(False)
-            self.start_button.setEnabled(False)
-            self.stop_button.setEnabled(True)
-            self.save_records_button.setEnabled(False)
+        self.is_recording = True
+        self.open_camera_button.setEnabled(False)
+        self.start_button.setEnabled(False)
+        self.stop_button.setEnabled(True)
+        self.save_records_button.setEnabled(False)
 
 
     def stop_recording(self):
-        if not self.mouse_as_joystick:
-            self.is_recording = False
-            self.start_button.setEnabled(True)
-            self.stop_button.setEnabled(False)
-            self.save_records_button.setEnabled(True)
-            self.open_camera_button.setEnabled(True)
+        self.is_recording = False
+        self.start_button.setEnabled(True)
+        self.stop_button.setEnabled(False)
+        self.save_records_button.setEnabled(True)
+        self.open_camera_button.setEnabled(True)
 
 
     def save_video(self):
-        if len(self.recorded_frames) == 0 or self.mouse_as_joystick:
+        if len(self.recorded_frames) == 0:
             return
 
         filename, _ = QFileDialog.getSaveFileName(self, "Save Video", "", "mp4 Files (*.mp4v)")
@@ -652,10 +620,7 @@ class MainApp(QMainWindow):
 
 
     def select_port(self, ind):
-        if self.mouse_as_joystick:
-            return
-        else:
-            self.selected_port = ind
+        self.selected_port = ind
 
     def get_selected_port(self):
         print("get_selected_port")
@@ -694,129 +659,124 @@ class MainApp(QMainWindow):
             return True
         except:
             print("Couldn't connect")
+            QMessageBox.warning(self, "Error", "Couldn't connect")
             return False
 
 
 
     def connect_port(self):
-        if not self.mouse_as_joystick:
-            if self.port_connected and self.ser is not None and self.ser.is_open:
-                self.ser.write(bytes([0xFE]))
-                # response_dis = ""
-                # my_list2 = []
-                time.sleep(0.3)
-                if self.console:
-                    if self.console.configs_window:
-                        if self.console.configs_window.timer.isActive():
-                            self.console.configs_window.timer.stop()
-                            self.console.configs_window.ser_th = None
-                            self.console.configs_window.hide()
-                    self.console.serial_th = None
-                    self.console.hide()
+        if self.port_connected and self.ser is not None and self.ser.is_open:
+            self.ser.write(bytes([0xFE]))
+            # response_dis = ""
+            # my_list2 = []
+            time.sleep(0.3)
+            if self.console:
+                if self.console.configs_window:
+                    if self.console.configs_window.timer.isActive():
+                        self.console.configs_window.timer.stop()
+                        self.console.configs_window.ser_th = None
+                        self.console.configs_window.hide()
+                self.console.serial_th = None
+                self.console.hide()
 
-            else:
-                port = self.get_selected_port()
-                print(self.get_selected_port())
+        else:
+            port = self.get_selected_port()
+            print(self.get_selected_port())
 
-                check_port = self.check_port_connection(port, self.baud_rate)
-                print("check port", check_port)
-                try:
-                    if check_port:
+            check_port = self.check_port_connection(port, self.baud_rate)
+            print("check port", check_port)
+            try:
+                if check_port:
+                    self.ser.write(bytes([0xFE]))
+                    response = ""
+                    attempt = 0
+                    while attempt < 10:
+                        attempt += 1
+                        time.sleep(0.5)
+                        my_list = []
+
+                        while self.ser.in_waiting > 0:
+                            d = self.ser.read()
+                            my_list.append(d)
+                            time.sleep(0.01)
+
+                        if my_list:
+                            response = "".join([i.decode("utf-8", errors="ignore") for i in my_list]).strip()
+                            try:
+                                js = json.loads(response)
+                            except json.JSONDecodeError:
+                                response = ""  # reset so we know it's not valid yet
+                                continue
+                            break
+                    if not response:
+                        print(f"No device id received after {attempt} attempts ({attempt * 0.5:.1f}s).")
+                        QMessageBox.warning(self, "Error", "Device did not confirm connection.")
+                        self.ser.close()
+                        try:
+                            self.connect_btn.setText("Connect")
+                        except Exception:
+                            pass
+                        return  # or raise/handle as you need
+
+                    print("received", response)
+                    js = json.loads(response)
+                    print(js.get('device_id'))
+
+                    if js.get('device_id') == self.device_id:
                         self.ser.write(bytes([0xFE]))
-                        response = ""
+
+                        confirmation = ""
                         attempt = 0
                         while attempt < 10:
                             attempt += 1
                             time.sleep(0.5)
-                            my_list = []
-
+                            my_list1 = []
                             while self.ser.in_waiting > 0:
                                 d = self.ser.read()
-                                my_list.append(d)
+                                my_list1.append(d)
                                 time.sleep(0.01)
 
-                            if my_list:
-                                response = "".join([i.decode("utf-8", errors="ignore") for i in my_list]).strip()
-                                try:
-                                    js = json.loads(response)
-                                except json.JSONDecodeError:
-                                    response = ""  # reset so we know it's not valid yet
+                            if my_list1:
+                                confirmation = "".join(
+                                    [i.decode("utf-8", errors="ignore") for i in my_list1]).strip()
+
+                                if "connected".lower() in confirmation.lower() or "Connected" in confirmation:
+                                    break
+                                else:
+                                    # received data but not the confirmation text yet -> continue attempts
+                                    confirmation = ""
                                     continue
-                                break
-                        if not response:
-                            print(f"No device id received after {attempt} attempts ({attempt * 0.5:.1f}s).")
+                        if not confirmation:
+                            print(f"No confirmation received after {attempt} attempts ({attempt * 0.5:.1f}s).")
                             QMessageBox.warning(self, "Error", "Device did not confirm connection.")
                             self.ser.close()
                             try:
                                 self.connect_btn.setText("Connect")
                             except Exception:
                                 pass
-                            return  # or raise/handle as you need
+                            return  # or raise/handle
 
-                        print("received", response)
-                        js = json.loads(response)
-                        print(js.get('device_id'))
+                        if "Connected" in confirmation or "connected" in confirmation.lower():
+                            self.connect_btn.setText("Disconnect")
+                            self.port_connected = True
+                            self.serial_thread = SerialThread(self.ser)
+                            self.serial_thread.received_data_signal.connect(self.receive_data_from_serial)
+                            self.console = SerialConsole(self.serial_thread)
+                            self.console.resize(600, 400)
+                            self.console.show()
+                            self.joystick_thread.start()
 
-                        if js.get('device_id') == self.device_id:
-                            self.ser.write(bytes([0xFE]))
+            except SerialException as e:
+                QMessageBox.critical(self, "Error", "Invalid port.")
+                print("Serial port error:", e)
+                if self.ser and self.ser.is_open:
+                    self.ser.close()
 
-                            confirmation = ""
-                            attempt = 0
-                            while attempt < 10:
-                                attempt += 1
-                                time.sleep(0.5)
-                                my_list1 = []
-                                while self.ser.in_waiting > 0:
-                                    d = self.ser.read()
-                                    my_list1.append(d)
-                                    time.sleep(0.01)
-
-                                if my_list1:
-                                    confirmation = "".join(
-                                        [i.decode("utf-8", errors="ignore") for i in my_list1]).strip()
-
-                                    if "connected".lower() in confirmation.lower() or "Connected" in confirmation:
-                                        break
-                                    else:
-                                        # received data but not the confirmation text yet -> continue attempts
-                                        confirmation = ""
-                                        continue
-                            if not confirmation:
-                                print(f"No confirmation received after {attempt} attempts ({attempt * 0.5:.1f}s).")
-                                QMessageBox.warning(self, "Error", "Device did not confirm connection.")
-                                self.ser.close()
-                                try:
-                                    self.connect_btn.setText("Connect")
-                                except Exception:
-                                    pass
-                                return  # or raise/handle
-
-                            if "Connected" in confirmation or "connected" in confirmation.lower():
-                                self.connect_btn.setText("Disconnect")
-                                self.port_connected = True
-                                self.serial_thread = SerialThread(self.ser)
-                                self.serial_thread.received_data_signal.connect(self.receive_data_from_serial)
-                                self.console = SerialConsole(self.serial_thread)
-                                self.console.resize(600, 400)
-                                self.console.show()
-                                self.joystick_thread.start()
-
-                except SerialException as e:
-                    QMessageBox.critical(self, "Error", "Invalid port.")
-                    print("Serial port error:", e)
-                    if self.ser and self.ser.is_open:
-                        self.ser.close()
-
-                except SerialTimeoutException as e:
-                    print("Timeout occurred:", e)
-                    if self.ser and self.ser.is_open:
-                        self.ser.close()
-
-                except Exception as e:
-                    print("Unexpected error:", e)
-                    QMessageBox.critical(self, "Error", "Invalid response from device.")
-                    if self.ser and self.ser.is_open:
-                        self.ser.close()
+            except Exception as e:
+                print("Unexpected error:", e)
+                QMessageBox.critical(self, "Error", "Invalid response from device.")
+                if self.ser and self.ser.is_open:
+                    self.ser.close()
 
 
     def receive_data_from_serial(self, text):
@@ -863,7 +823,7 @@ class MainApp(QMainWindow):
 
 
     def show_configurations(self):
-        if self.console is not None and not self.mouse_as_joystick:
+        if self.console is not None:
             if self.console.configs != {} and self.console.configs_window is not None:
                 if self.console.configs_window.isVisible():
                     self.console.configs_window.hide()
@@ -872,22 +832,21 @@ class MainApp(QMainWindow):
 
 
     def close_camera(self):
-        if not self.mouse_as_joystick:
-            self.camera_closed = True
-            self.is_recording = False
+        self.camera_closed = True
+        self.is_recording = False
 
-            if self.video_thread:
-                self.video_thread.stop()
-                self.video_thread = None
+        if self.video_thread:
+            self.video_thread.stop()
+            self.video_thread = None
 
-            self.video_label.clear()
-            self.track_video = None
-            self.track_video_label.clear()
-            self.recorded_frames = []
-            self.close_camera_button.setEnabled(False)
-            self.open_camera_button.setEnabled(True)
-            self.save_records_button.setEnabled(False)
-            self.start_button.setEnabled(False)
+        self.video_label.clear()
+        self.track_video = None
+        self.track_video_label.clear()
+        self.recorded_frames = []
+        self.close_camera_button.setEnabled(False)
+        self.open_camera_button.setEnabled(True)
+        self.save_records_button.setEnabled(False)
+        self.start_button.setEnabled(False)
 
 
     def closeEvent(self, event):
@@ -1028,6 +987,7 @@ class SerialConsole(QWidget):
             return json.dumps({"parameters": "%"})
         else:
             self.console.appendPlainText("Wrong parameter name")
+
 
     def set_config(self, param_name: str, value: int):
         if param_name == "kp_th":
@@ -1172,8 +1132,8 @@ class ConfigurationsWindow(QWidget):
             if fields is self.set_fields and (param_name == 'track_x' or param_name == "track_y"):
                 continue
             elif (fields is self.get_fields
-                  and (param_name == 'track_x' or param_name == "track_y" or
-                    param_name == 'cursor_x' or param_name == 'cursor_y')) and configs[param_name] > 1980:
+                  and ((param_name == 'track_x' or param_name == 'cursor_x') and  configs[param_name] > 1920)
+                  or ((param_name == "track_y" or param_name == 'cursor_y') and  configs[param_name] > 1080)):
                 param = int(configs[param_name]) & 0x7FFF
                 fields[param_name].setText(str(param))
             else:
