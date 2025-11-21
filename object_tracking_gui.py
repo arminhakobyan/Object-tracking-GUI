@@ -66,35 +66,85 @@ def write_to_serial(ser, js):
     ser.write(bytes([0xff]))
 
 
+class Toggle(QCheckBox):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setText("")
+        self.setCursor(Qt.PointingHandCursor)
+        self.setStyleSheet("""
+            QCheckBox {
+                spacing: 6px;
+                min-width: 40px;
+                min-height: 20px;
+                border-radius: 10px;
+                background: #888888;
+                padding-left: 2px;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+                border-radius: 8px;
+                background: white;
+                margin: 2px 0 0 2px;
+            }
+            QCheckBox:checked {
+                background: #4CAF50;
+                padding-left: 22px;
+            }
+            QCheckBox:unchecked {
+                background: #888888;
+                padding-left: 2px;
+            }
+        """)
+
+
+
 class VideoCaptureThread(QThread):
     change_frame_signal = pyqtSignal(np.ndarray)
     camera_ready_signal = pyqtSignal()
 
-    def __init__(self, index, api_pref, ):
+    def __init__(self, index, api_pref, default_frame=None):
         super().__init__()
         self._index = index
         self._api_pref = api_pref
-        self.video_capture = cv2.VideoCapture(self._index, self._api_pref)
-        self.video_capture.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-        self.video_capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+        self._default_frame = default_frame.copy() if default_frame is not None else None
         self.running = True
+
+        if index is not None:
+            self.video_capture = cv2.VideoCapture(self._index, self._api_pref)
+            self.video_capture.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+            self.video_capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+        else:
+            self.video_capture = None
+
 
     def get_index(self):
         return self._index
 
     def run(self):
         self.running = True
-        if self.video_capture.isOpened():
+        if self.video_capture and self.video_capture.isOpened():
             while self.running:
                 ret, frame = self.video_capture.read()
                 if ret:
                     self.change_frame_signal.emit(frame)
+                else:
+                    if self._default_frame is not None:
+                        self.change_frame_signal.emit(self._default_frame)
+                    self.msleep(30)
+        else:
+            while self.running:
+                if self._default_frame is not None:
+                    self.change_frame_signal.emit(self._default_frame)
+                self.msleep(30)
+
 
     def stop(self):
         self.running = False
         self.wait()
-        self.video_capture.release()
-        self.video_capture = None
+        if self.video_capture:
+            self.video_capture.release()
+            self.video_capture = None
 
 
 class SerialThread(QThread):
@@ -207,9 +257,25 @@ class MainApp(QMainWindow):
         self.video_label = QLabel(self)
         self.video_label_deviation = [50, 50]
         self.video_label.setGeometry(self.video_label_deviation[0], self.video_label_deviation[1], 960, 540)
-        #self.video_label.mousePressEvent = self.click_on
 
-        self.video_label.setMouseTracking(True)
+        self.gray_frame = np.full((1920, 1080, 3), 128, dtype=np.uint8)   # (960, 540, 3)
+        self.gray_pixmap = QtGui.QPixmap(self.video_label.width(), self.video_label.height())
+        self.gray_pixmap.fill(Qt.darkGray)
+        self.video_label.setPixmap(self.gray_pixmap)
+
+        self.video_thread = VideoCaptureThread(index=None, api_pref=None, default_frame=self.gray_frame)
+        self.video_thread.camera_ready_signal.connect(self.hide_loading)
+        self.video_thread.change_frame_signal.connect(self.update_frame)
+        self.video_thread.start()
+        print("self.video_thread", self.video_thread)
+
+        self.stabilization_label = QLabel('Stabilization', self)
+        self.stabilization_label.setGeometry(910, 15, 100, 30)
+        self.track_toggle = Toggle(self)
+        self.track_toggle.setGeometry(970, 20, 10, 5)
+        self.track_toggle.stateChanged.connect(self.track_on_off)
+
+        #self.video_label.setMouseTracking(True)
 
         self.available_cameras_label = QLabel(self)
         self.available_cameras_label.setText("Available Cameras:")
@@ -250,8 +316,8 @@ class MainApp(QMainWindow):
 
         self.serial_thread = None
         self.video_writer = None
-        self.video_capture = None
-        self.video_thread = None
+        #self.video_capture = None
+        #self.video_thread = None
         self.is_recording = False
         self.camera_closed = False
         self.input_data_json = None
@@ -335,7 +401,7 @@ class MainApp(QMainWindow):
         self.console = None
 
         self.pointer = QLabel(self)  # self.video_label
-        self.pointer.setFixedSize(0, 0)  # (10, 10)
+        self.pointer.setFixedSize(10, 10)  # (0, 0)
         self.pointer.setStyleSheet("background-color: red; border-radius: 5px;")
         #self.pointer.move(self.resized_frame_shape[0], self.resized_frame_shape[1])
         #self.pointer.move(0, 0)
@@ -349,7 +415,7 @@ class MainApp(QMainWindow):
         self.joystick_thread.stopped_moving.connect(self.stop_joystick_motion)
         self.joystick_thread.button_pushed.connect(self.handle_joystick_button)
 
-        self.pointer_pos = [0, 0]
+        self.pointer_pos = [50, 50]
 
 
     def keyPressEvent(self, event):
@@ -363,6 +429,10 @@ class MainApp(QMainWindow):
         if self.mouse_as_joystick and event.button() == Qt.LeftButton:
             self.mouse_pressed = False
             self.last_mouse_pos = None
+
+
+    def track_on_off(self, state):
+        print("ON" if state else "OFF")
 
 
     def mousePressEvent(self, event):
@@ -517,20 +587,25 @@ class MainApp(QMainWindow):
         self.start_button.setEnabled(True)
         self.close_camera_button.setEnabled(True)
 
+        print("self.video_thread", self.video_thread)
+
         if self.video_thread is not None:  # and self.video_thread.get_index() != self.available_cameras[self.selected_camera][1]:
             self.video_thread.stop()
             self.video_thread = None
+        if self.video_label:
+            self.video_label.clear()
+        if self.track_video_label:
+            self.track_video_label.clear()
 
         ind = self.available_cameras[self.selected_camera][1]
         api_pref = self.available_cameras[self.selected_camera][2]
 
-        self.video_thread = VideoCaptureThread(ind, api_pref)
+        self.video_thread = VideoCaptureThread(index=ind, api_pref=api_pref, default_frame=None)
 
         self.video_thread.camera_ready_signal.connect(self.hide_loading)
         self.video_thread.change_frame_signal.connect(self.update_frame)
 
         self.video_thread.start()
-        #self.joystick_thread.start()
 
 
     @pyqtSlot(np.ndarray)
@@ -549,15 +624,19 @@ class MainApp(QMainWindow):
 
             if self.console:
                 if self.console.configs_window is not None:
-                    self.cursor_x = int(self.console.configs_window.track_coord_x / self.scale_x + self.video_label_deviation[0] + 5)
-                    self.cursor_y = int(self.console.configs_window.track_coord_y / self.scale_y + self.video_label_deviation[1] + 5)
+                    self.cursor_x = int(
+                        self.console.configs_window.track_coord_x / self.scale_x + self.video_label_deviation[0] + 5)
+                    self.cursor_y = int(
+                        self.console.configs_window.track_coord_y / self.scale_y + self.video_label_deviation[1] + 5)
                     self.track_frame_size = self.console.configs_window.track_frame_size
 
             if self.cursor_x is not None and self.cursor_y is not None:
                 x_start = int(max(1, self.cursor_x - self.track_frame_size[1] / 2 - self.video_label_deviation[0]))
-                x_end = int(min(self.resized_frame_shape[1], self.cursor_x + self.track_frame_size[1] / 2 - self.video_label_deviation[0]))
+                x_end = int(min(self.resized_frame_shape[1],
+                                self.cursor_x + self.track_frame_size[1] / 2 - self.video_label_deviation[0]))
                 y_start = int(max(0, self.cursor_y - self.track_frame_size[0] / 2 - self.video_label_deviation[0]))
-                y_end = int(min(self.resized_frame_shape[0], self.cursor_y + self.track_frame_size[0] / 2 - self.video_label_deviation[0]))
+                y_end = int(min(self.resized_frame_shape[0],
+                                self.cursor_y + self.track_frame_size[0] / 2 - self.video_label_deviation[0]))
 
                 self.track_video = frame[y_start:y_end, x_start:x_end]
 
@@ -575,10 +654,6 @@ class MainApp(QMainWindow):
                 self.track_video_label.clear()
 
             self.current_frame = frame
-
-            if self.is_recording:
-                self.recorded_frames.append(self.current_frame)
-
 
     def get_text_from_consolefield(self):
         print(self.console_field.document().toPlainText())
@@ -801,6 +876,7 @@ class MainApp(QMainWindow):
             self.send_coordinates_through_serial(coords=sending_coords)
 
 
+
     def send_coordinates_through_serial(self, coords: dict):
         coords_to_json = json.dumps(coords)
 
@@ -840,6 +916,7 @@ class MainApp(QMainWindow):
             self.video_thread = None
 
         self.video_label.clear()
+        self.video_label.setPixmap(self.gray_pixmap)
         self.track_video = None
         self.track_video_label.clear()
         self.recorded_frames = []
