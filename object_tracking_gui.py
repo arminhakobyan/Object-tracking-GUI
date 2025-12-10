@@ -108,7 +108,6 @@ class Toggle(QCheckBox):
         """)
 
 
-
 class VideoCaptureThread(QThread):
     change_frame_signal = pyqtSignal(np.ndarray)
     camera_ready_signal = pyqtSignal()
@@ -188,14 +187,16 @@ class SerialThread(QThread):
                 if self.serial.in_waiting > 0:
                     my_list = []
                     data = ""
-                    while self.serial.in_waiting > 0:
-                        d = self.serial.read()
+                    cnt = 0
+                    while self.serial.in_waiting > 0 and cnt < 3000:
+                        d = self.serial.readline(self.serial.in_waiting)
                         my_list.append(d)
-                        time.sleep(0.02)
+                        time.sleep(0.001)
+                        cnt  += 1
                     for i in my_list:
                         data += str(i.decode("utf-8"))
 
-                    print("received the data ", data)
+                    print("received: ", data)
 
                     data = data.strip()
                     self.received_data_signal.emit(data)
@@ -344,6 +345,9 @@ class MainApp(QMainWindow):
         # buffer for point coordinates
         self.coords_buffer = deque()
 
+        self.buffer_data = ""              # received text will be saved here
+        self.buffer_deque_data = deque()   # here I append anything received - within { }, to be complete config params or coordinates
+
         self.serial_thread = None
         self.video_writer = None
         #self.video_capture = None
@@ -375,14 +379,12 @@ class MainApp(QMainWindow):
         self.pointer_coord = None
         self.device_id = 1234567890
 
-        """
         self.tracking = False
         self.tracking_coord_count = 0
         self.receiving_tracking_coord_timer = QTimer(self)
         self.receiving_tracking_coord_timer.setInterval(10_000)  # 10 seconds
         self.receiving_tracking_coord_timer.timeout.connect(self.report_tracking_coord_count)
-        # self.receiving_tracking_coord_timer.start()
-        """
+        #self.receiving_tracking_coord_timer.start()
 
         self.joystick_pointers_count = 0
 
@@ -482,7 +484,7 @@ class MainApp(QMainWindow):
                     #self.console.configs_window.configs_dict['stabilization'] = st
                     # request to send 'stabilization' parameter update
                     self.console.configs_window.request_one_parameter(param_name='stabilization')
-                    time.sleep(0.3)
+                    time.sleep(0.1)
 
 
     def update_stabilization_toggle(self, state):
@@ -498,13 +500,13 @@ class MainApp(QMainWindow):
         if self.serial_thread:
             tr_json = json.dumps({'tracking': st})
             self.serial_thread.send_text_signal.emit(tr_json)
+            if st:
+               self.receiving_tracking_coord_timer.start()
             if self.console:
                 if self.console.configs_window:
                     self.console.configs_window.change_parameter_value(st, 'tracking')
-                    #self.console.configs_window.configs_dict['track'] = st
-                    # request to send 'stabilization' parameter update
                     self.console.configs_window.request_one_parameter(param_name='tracking')
-                    time.sleep(0.3)
+                    time.sleep(0.1)
 
 
 
@@ -513,6 +515,7 @@ class MainApp(QMainWindow):
         self.tracking_toggle.blockSignals(True)
         self.tracking_toggle.setChecked(bool(state))
         self.tracking_toggle.blockSignals(False)
+
 
 
     def motion_on_off(self, state):
@@ -725,7 +728,6 @@ class MainApp(QMainWindow):
                     if bool(configs_track) != ui_track_state:
                         self.update_tracking_toggle(configs_track)
 
-
             if self.cursor_x is not None and self.cursor_y is not None:
                 x_start = int(max(1, self.cursor_x - self.track_frame_size[1] / 2 - self.video_label_deviation[0]))
                 x_end = int(min(self.resized_frame_shape[1],
@@ -840,12 +842,15 @@ class MainApp(QMainWindow):
             self.ser.write(bytes([0xFE]))
             time.sleep(0.3)
             if self.console:
+                self.receiving_tracking_coord_timer.stop()
                 if self.console.configs_window:
                     self.console.configs_window.ser_th = None           #if self.console.configs_window.timer.isActive():
                     self.console.configs_window.hide()                               #    self.console.configs_window.timer.stop()
                 self.console.serial_th = None
                 self.console.hide()
-
+            if self.serial_thread:
+                self.serial_thread.stop()
+                self.serial_thread = None
         else:
             port = self.get_selected_port()
             print(self.get_selected_port())
@@ -947,26 +952,9 @@ class MainApp(QMainWindow):
                 if self.ser and self.ser.is_open:
                     self.ser.close()
 
+
     def receive_data_from_serial(self, text):
         write_log(text)
-        if '}'in text:
-            if text.index('}') != len(text) - 1:
-                ind = text.index('}')
-                text1 = text[: ind]
-                text2 = text[ind + 1:]
-                text1_dict = json.loads(text1)
-                text2_dict = json.loads(text2)
-
-                common_keys1 = common_elements(text1_dict, ['track_x', 'track_y'])
-                common_keys2 = common_elements(text2_dict, ['track_x', 'track_y'])
-
-                if common_keys1 == ['track_x', 'track_y'] or common_keys2 == ['track_x', 'track_y']:
-                    self.tracking_coord_count += 1
-            else:
-                text_dict = json.loads(text)
-                if text_dict.keys() == ['track_x', 'track_y']:
-                    self.tracking_coord_count += 1
-
         if "Disconnect" in text:
             self.connect_btn.setText("Connect")
             self.port_connected = False
@@ -980,14 +968,31 @@ class MainApp(QMainWindow):
             except EOFError as e:
                 print(e)
 
+        self.buffer_data += text
 
-    """
+        while '{' in self.buffer_data and '}' in self.buffer_data:
+            ind1 = self.buffer_data.index('{')
+            ind2 = self.buffer_data.index('}') + 1
+            sub_text = self.buffer_data[ind1 : ind2]
+            #print(sub_text)
+            try:
+                sub_text_dict = json.loads(sub_text)
+                if list(sub_text_dict.keys()) == ['track_x', 'track_y']:    #if len(sub_text_dict) == 2:    then-> coordinates track_x, track_y
+                    self.tracking_coord_count += 1
+
+            except json.decoder.JSONDecodeError as e:
+                print(f"json decoding error: {sub_text}")
+            except Exception as e:
+                print(f"Error: {sub_text}")
+            self.buffer_data = self.buffer_data[ind2:]
+
+
     def report_tracking_coord_count(self):
-        print("Coordinates in last 10 seconds:", self.tracking_coord_count)
+        #print("Coordinates in last 10 seconds:", self.tracking_coord_count)
         per_second_coord_count = int(self.tracking_coord_count / 10)
         self.tracking_coord_editline.setText(str(per_second_coord_count))
         self.tracking_coord_count = 0
-    """
+
 
 
     def send_buffer_coordinates(self, buffer):
@@ -1107,16 +1112,14 @@ class SerialConsole(QWidget):
 
     def send_text_show_on_console(self, text):
         if text != "" and "Disconnected" not in text:
-            print("received the data", text)
-            # "{}".split("}")[-1]
-            # text[text.index("{") : text.index("}") + 1]
-            if "{" in text and "}" in text:
+            if "{" in text and "}" in text and 'Config' in text:
                 last_data = ""
+                st = text.index('{')
+                end = text.index('}')+1
+                text = text[st:end]
                 if text.index("}") != len(text)-1:
                     text_list = text.split("}")
-                    print(text_list)
                     last_data = str(text_list[-2]) + '}'
-                    print("last data", last_data)
                 else:
                     last_data = text
                 self.configs = json.loads(last_data)
