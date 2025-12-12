@@ -44,9 +44,8 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QDialogButtonBox,
     QPlainTextEdit,
-
+    QDockWidget,
 )
-
 
 def write_log(text: str, filename="device_log.txt"):
     with open(filename, "a") as f:     # encoding="utf-8"
@@ -57,11 +56,18 @@ def clear_log(filename="device_log.txt"):
     if os.path.exists(filename) and os.path.getsize(filename) > 0:
         open(filename, "w").close()  # clear the content
 
-def list_open_com_ports():
+def is_bluetooth_port(port_info):
+    text = port_info.description.lower()
+    return "bluetooth" in text
+
+def list_open_com_ports():     # skip bluetooth ports
     ports = list_ports.comports()
     open_ports = []
     for port in ports:
-        open_ports.append(port.device)
+        if is_bluetooth_port(port):
+            continue
+        else:
+            open_ports.append(port.device)
     return open_ports
 
 
@@ -341,6 +347,11 @@ class MainApp(QMainWindow):
         self.configurations_window_btn = QPushButton("Configurations", self)
         self.configurations_window_btn.setGeometry(1650, 150, 150, 50)
         self.configurations_window_btn.clicked.connect(self.show_configurations)
+        self.configs_window = None
+        #self.configs_dock_widget = None
+        #self.configs_dock_widget = QDockWidget(self)
+        #self.configs_dock_widget.setAllowedAreas(Qt.AllDockWidgetAreas)
+        #self.configs_dock_widget.setFloating(True)
 
         # buffer for point coordinates
         self.coords_buffer = deque()
@@ -350,8 +361,6 @@ class MainApp(QMainWindow):
 
         self.serial_thread = None
         self.video_writer = None
-        #self.video_capture = None
-        #self.video_thread = None
         self.is_recording = False
         self.camera_closed = False
         self.input_data_json = None
@@ -378,6 +387,8 @@ class MainApp(QMainWindow):
         self.pointers_buffer = deque()
         self.pointer_coord = None
         self.device_id = 1234567890
+        self.configs = {}
+        self.configs_window = None
 
         self.tracking = False
         self.tracking_coord_count = 0
@@ -439,8 +450,6 @@ class MainApp(QMainWindow):
         self.track_video_label_x = 1070
         self.track_video_label_y = 50
 
-        self.console = None
-
         self.pointer = QLabel(self)  # self.video_label
         self.pointer.setFixedSize(10, 10)  # (0, 0)
         self.pointer.setStyleSheet("background-color: red; border-radius: 5px;")
@@ -457,6 +466,7 @@ class MainApp(QMainWindow):
         self.joystick_thread.button_pushed.connect(self.handle_joystick_button)
 
         self.pointer_pos = [self.video_label_deviation[0], self.video_label_deviation[1]]
+
 
 
     def keyPressEvent(self, event):
@@ -478,13 +488,10 @@ class MainApp(QMainWindow):
         if self.serial_thread:
             stab_json = json.dumps({'stabilization': st})
             self.serial_thread.send_text_signal.emit(stab_json)
-            if self.console:
-                if self.console.configs_window:
-                    self.console.configs_window.change_parameter_value(st, 'stabilization')
-                    #self.console.configs_window.configs_dict['stabilization'] = st
-                    # request to send 'stabilization' parameter update
-                    self.console.configs_window.request_one_parameter(param_name='stabilization')
-                    time.sleep(0.1)
+            if self.configs_window:
+                self.configs_window.change_parameter_value(st, 'stabilization')
+                self.configs_window.request_one_parameter(param_name='stabilization')
+                time.sleep(0.01)
 
 
     def update_stabilization_toggle(self, state):
@@ -502,11 +509,14 @@ class MainApp(QMainWindow):
             self.serial_thread.send_text_signal.emit(tr_json)
             if st:
                self.receiving_tracking_coord_timer.start()
-            if self.console:
-                if self.console.configs_window:
-                    self.console.configs_window.change_parameter_value(st, 'tracking')
-                    self.console.configs_window.request_one_parameter(param_name='tracking')
-                    time.sleep(0.1)
+            else:
+                self.receiving_tracking_coord_timer.stop()
+                self.tracking_coord_editline.setText('0')
+                self.tracking_coord_count = 0
+            if self.configs_window:
+                self.configs_window.change_parameter_value(st, 'tracking')
+                self.configs_window.request_one_parameter(param_name='tracking')
+                time.sleep(0.01)
 
 
 
@@ -606,9 +616,9 @@ class MainApp(QMainWindow):
             y_json = json.dumps(pointer_y)
             if not self.joystick_stopped:
                 self.serial_thread.send_joystick_coordinates_with_interval.emit(x_json, y_json)
-                if self.console.configs_window:
-                    self.console.configs_window.change_parameter_value(x, "cursor_x")
-                    self.console.configs_window.change_parameter_value(y, "cursor_y")
+                if self.configs_window:
+                    self.configs_window.change_parameter_value(x, "cursor_x")
+                    self.configs_window.change_parameter_value(y, "cursor_y")
 
 
     def handle_joystick_button(self, i: int):
@@ -708,25 +718,24 @@ class MainApp(QMainWindow):
             self.scale_x = self.original_frame_shape[1] / self.resized_frame_shape[1]  # width
             self.scale_y = self.original_frame_shape[0] / self.resized_frame_shape[0]  # height
 
-            if self.console:
-                if self.console.configs_window is not None:
-                    self.cursor_x = int(
-                        self.console.configs_window.track_coord_x / self.scale_x + self.video_label_deviation[0] + 5)
-                    self.cursor_y = int(
-                        self.console.configs_window.track_coord_y / self.scale_y + self.video_label_deviation[1] + 5)
-                    self.track_frame_size = self.console.configs_window.track_frame_size
+            if self.configs_window is not None:
+                self.cursor_x = int(
+                    self.configs_window.track_coord_x / self.scale_x + self.video_label_deviation[0] + 5)
+                self.cursor_y = int(
+                        self.configs_window.track_coord_y / self.scale_y + self.video_label_deviation[1] + 5)
+                self.track_frame_size = self.configs_window.track_frame_size
 
-                    ui_stab_state = self.stabilization_toggle.isChecked()
-                    configs_stab = int(self.console.configs_window.get_fields['stabilization'].text())
+                ui_stab_state = self.stabilization_toggle.isChecked()
+                configs_stab = int(self.configs_window.get_fields['stabilization'].text())
 
-                    if bool(configs_stab) != ui_stab_state:
-                        self.update_stabilization_toggle(configs_stab)
+                if bool(configs_stab) != ui_stab_state:
+                    self.update_stabilization_toggle(configs_stab)
 
-                    ui_track_state = self.tracking_toggle.isChecked()
-                    configs_track = int(self.console.configs_window.get_fields['tracking'].text())
+                ui_track_state = self.tracking_toggle.isChecked()
+                configs_track = int(self.configs_window.get_fields['tracking'].text())
 
-                    if bool(configs_track) != ui_track_state:
-                        self.update_tracking_toggle(configs_track)
+                if bool(configs_track) != ui_track_state:
+                    self.update_tracking_toggle(configs_track)
 
             if self.cursor_x is not None and self.cursor_y is not None:
                 x_start = int(max(1, self.cursor_x - self.track_frame_size[1] / 2 - self.video_label_deviation[0]))
@@ -752,10 +761,6 @@ class MainApp(QMainWindow):
                 self.track_video_label.clear()
 
             self.current_frame = frame
-
-
-    def get_text_from_consolefield(self):
-        print(self.console_field.document().toPlainText())
 
 
     def start_recording(self):
@@ -831,26 +836,18 @@ class MainApp(QMainWindow):
             self.ser.open()
             self.port_connected = True
             return True
-        except:
-            print("Couldn't connect")
-            QMessageBox.warning(self, "Error", "Couldn't connect")
+        except Exception as e:
+            print(e)
+            QMessageBox.warning(self, f"Error", "{e}")
             return False
 
 
     def connect_port(self):
         if self.port_connected and self.ser is not None and self.ser.is_open:
             self.ser.write(bytes([0xFE]))
-            time.sleep(0.3)
-            if self.console:
-                self.receiving_tracking_coord_timer.stop()
-                if self.console.configs_window:
-                    self.console.configs_window.ser_th = None           #if self.console.configs_window.timer.isActive():
-                    self.console.configs_window.hide()                               #    self.console.configs_window.timer.stop()
-                self.console.serial_th = None
-                self.console.hide()
-            if self.serial_thread:
-                self.serial_thread.stop()
-                self.serial_thread = None
+            time.sleep(0.2)
+            if self.configs_window:
+                self.configs_window.hide()                               #    self.console.configs_window.timer.stop()
         else:
             port = self.get_selected_port()
             print(self.get_selected_port())
@@ -896,7 +893,6 @@ class MainApp(QMainWindow):
 
                     if js.get('device_id') == self.device_id:
                         self.ser.write(bytes([0xFE]))
-
                         confirmation = ""
                         attempt = 0
                         while attempt < 10:
@@ -935,9 +931,12 @@ class MainApp(QMainWindow):
                             self.port_connected = True
                             self.serial_thread = SerialThread(self.ser)
                             self.serial_thread.received_data_signal.connect(self.receive_data_from_serial)
-                            self.console = SerialConsole(self.serial_thread)
-                            self.console.resize(600, 400)
-                            self.console.show()
+                            self.serial_thread.start()
+                            time.sleep(1)
+
+                            configs_json = json.dumps({"parameters": "%"})
+                            self.serial_thread.send_text_signal.emit(configs_json)
+
                             self.joystick_thread.start()
 
             except SerialException as e:
@@ -958,9 +957,6 @@ class MainApp(QMainWindow):
         if "Disconnect" in text:
             self.connect_btn.setText("Connect")
             self.port_connected = False
-            if self.console is not None and self.console.isVisible():
-                self.console.hide()
-                self.console = None
             try:
                 self.serial_thread.stop()
                 self.ser.close()
@@ -968,17 +964,31 @@ class MainApp(QMainWindow):
             except EOFError as e:
                 print(e)
 
-        self.buffer_data += text
+        if "{" in text and "}" in text and '[Config]' in text:
+            st = text.index('{')
+            end = text.index('}') + 1
+            t = text[st:end]
 
+            self.configs = json.loads(t)
+            if self.configs_window is None:
+                self.configs_window = ConfigurationsWindow(configs_dict=self.configs, ser_th=self.serial_thread)
+                #self.configs_dock_widget.setGeometry(1350, 250, 500, 500)
+                #self.configs_dock_widget.setWidget(self.configs_window)
+                #self.configs_dock_widget.show()
+                self.configs_window.show()
+            else:
+                self.configs_window.fill_get_fields(t)
+
+        self.buffer_data += text
         while '{' in self.buffer_data and '}' in self.buffer_data:
             ind1 = self.buffer_data.index('{')
             ind2 = self.buffer_data.index('}') + 1
             sub_text = self.buffer_data[ind1 : ind2]
-            #print(sub_text)
             try:
                 sub_text_dict = json.loads(sub_text)
                 if list(sub_text_dict.keys()) == ['track_x', 'track_y']:    #if len(sub_text_dict) == 2:    then-> coordinates track_x, track_y
                     self.tracking_coord_count += 1
+                self.configs_window.fill_get_fields(sub_text)
 
             except json.decoder.JSONDecodeError as e:
                 print(f"json decoding error: {sub_text}")
@@ -1005,31 +1015,30 @@ class MainApp(QMainWindow):
     def send_coordinates_through_serial(self, coords: dict):
         coords_to_json = json.dumps(coords)
 
-        if self.console is not None:
-            self.serial_thread.send_text_signal.emit(coords_to_json)
-            if self.console.configs != {} and self.console.configs_window is not None:
-                keys = list(coords.keys())
-                for k in keys:
-                    self.console.configs_window.change_parameter_value(val=coords[k], label_name=k)
-                    print("self.buffer_configs[track_fr_h]:",
-                          self.console.configs_window.buffer_configs["track_fr_h"])
 
-                self.console.configs_window.track_frame_size = [
-                    self.console.configs_window.buffer_configs["track_fr_h"],
-                    self.console.configs_window.buffer_configs["track_fr_w"]]
-                self.console.configs_window.track_coord_x = self.console.configs_window.buffer_configs["track_x"]
-                self.console.configs_window.track_coord_y = self.console.configs_window.buffer_configs["track_y"]
+        self.serial_thread.send_text_signal.emit(coords_to_json)
+        if self.configs != {} and self.configs_window is not None:
+            keys = list(coords.keys())
+            for k in keys:
+                self.configs_window.change_parameter_value(val=coords[k], label_name=k)
+                print("self.buffer_configs[track_fr_h]:",
+                          self.configs_window.buffer_configs["track_fr_h"])
+
+            self.configs_window.track_frame_size = [
+                self.configs_window.buffer_configs["track_fr_h"],
+                self.configs_window.buffer_configs["track_fr_w"]]
+            self.configs_window.track_coord_x = self.configs_window.buffer_configs["track_x"]
+            self.configs_window.track_coord_y = self.configs_window.buffer_configs["track_y"]
         else:
             write_to_serial(self.ser, coords_to_json)
 
 
     def show_configurations(self):
-        if self.console is not None:
-            if self.console.configs != {} and self.console.configs_window is not None:
-                if self.console.configs_window.isVisible():
-                    self.console.configs_window.hide()
-                else:
-                    self.console.configs_window.show()
+        if self.configs != {} and self.configs_window is not None:
+            if self.configs_window.isVisible():
+                self.configs_window.hide()
+            else:
+                self.configs_window.show()
 
 
     def close_camera(self):
@@ -1059,10 +1068,8 @@ class MainApp(QMainWindow):
         if self.is_recording:
             self.stop_recording()
         self.close_camera()
-        if self.console:
-            self.console.close()
-            if self.console.configs_window:
-                self.console.configs_window.close()
+        if self.configs_window:
+            self.configs_window.close()
         clear_log()
         event.accept()
 
@@ -1078,182 +1085,6 @@ def dict_to_text(d: dict):
 def the_closest_string(s: str, list_of_strings: list):
     return max(list_of_strings, key=lambda s: SequenceMatcher(None, target, s).ratio())
 
-
-
-class SerialConsole(QWidget):
-    def __init__(self, serial_th):
-        super().__init__()
-        self.setWindowTitle("Serial Console")
-
-        self.serial_th = serial_th
-
-        self.layout = QVBoxLayout(self)
-        self.console = QPlainTextEdit(self)
-        self.console.setReadOnly(True)
-        self.layout.addWidget(self.console)
-
-        self.input_field = QPlainTextEdit(self)
-        self.input_field.setPlaceholderText(
-            "To get the configuraton parameters write << get configuration parameters >> command and enter!")
-
-        self.layout.addWidget(self.input_field)
-        self.waiting_for_data = False
-
-        # self.serial_th.send_bytes_signal.emit(bytes([0xff]))
-        self.serial_th.received_data_signal.connect(self.send_text_show_on_console)
-        self.serial_th.start()
-
-        # Connect key press event for input field
-        self.input_field.keyPressEvent = self.handle_key_press
-
-        self.configs = {}
-        self.configs_window = None
-
-
-    def send_text_show_on_console(self, text):
-        if text != "" and "Disconnected" not in text:
-            if "{" in text and "}" in text and 'Config' in text:
-                last_data = ""
-                st = text.index('{')
-                end = text.index('}')+1
-                text = text[st:end]
-                if text.index("}") != len(text)-1:
-                    text_list = text.split("}")
-                    last_data = str(text_list[-2]) + '}'
-                else:
-                    last_data = text
-                self.configs = json.loads(last_data)
-                console_text = dict_to_text(self.configs)
-                self.console.appendPlainText(console_text)
-                if self.configs_window is None:
-                    self.configs_window = ConfigurationsWindow(configs_dict=self.configs, ser_th=self.serial_th)
-                    self.configs_window.show()
-                else:
-                    self.configs_window.fill_get_fields(last_data)
-        else:
-            print("no data")
-
-
-    def send_input(self):
-        user_input = self.input_field.toPlainText().strip()
-        to_json = ""
-        command = user_input
-        if user_input:
-            input_list = user_input.split(" ", 1)
-            if input_list[0] == "get":
-                list_parameters = list(self.configs.keys())
-                list_parameters.append("configuration parameters")
-                to_json = self.get_config(param_name=input_list[1])
-            elif input_list[0] == "set":
-                data_list_set = input_list[1].split(" ", 1)
-                config_name = data_list_set[0]
-                val = int(data_list_set[1])
-                to_json = self.set_config(param_name=config_name, value=val)
-                self.configs_window.change_parameter_value(val=val, label_name=config_name)
-                self.configs_window.request_one_parameter(param_name=config_name)
-
-            else:
-                command = "wrong command"
-
-        self.serial_th.send_text_signal.emit(to_json)
-
-        self.console.appendPlainText(f"> {command}")  # Show sent command
-
-        self.input_field.clear()
-
-
-    def get_config(self, param_name: str):
-        if param_name == "kp_th":
-            return json.dumps({"kp_th": "%"})
-        elif param_name == "kp_up_th":
-            return json.dumps({"kp_up_th": "%"})
-        elif param_name == "kp_down_th":
-            return json.dumps({"kp_down_th": "%"})
-        elif param_name == "dir_th":
-            return json.dumps({"dir_th": "%"})
-        elif param_name == "autocorr_th":
-            return json.dumps({"autocorr_th": "%"})
-        elif param_name == "match_size":
-            return json.dumps({"match_size": "%"})
-        elif param_name == "track_fr_w":
-            return json.dumps({"track_fr_w": "%"})
-        elif param_name == "track_fr_h":
-            return json.dumps({"track_fr_h": "%"})
-        elif param_name == "track_x":
-            return json.dumps({"track_x": "%"})
-        elif param_name == "track_y":
-            return json.dumps({"track_y": "%"})
-        elif param_name == "cursor_x":
-            return json.dumps({"cursor_x": "%"})
-        elif param_name == "cursor_y":
-            return json.dumps({"cursor_y": "%"})
-        elif param_name == "resolution":
-            return json.dumps({"resolution": "%"})
-        elif param_name == "stabilization":
-            return json.dumps({"stabilization": "%"})
-        elif param_name == "tracking":
-            return json.dumps({"tracking": "%"})
-        elif param_name == "configuration parameters":
-            return json.dumps({"parameters": "%"})
-        else:
-            self.console.appendPlainText("Wrong parameter name")
-
-
-    def set_config(self, param_name: str, value: int):
-        if param_name == "kp_th":
-            self.configs["kp_th"] = value
-            return json.dumps({"kp_th": value})
-        elif param_name == "kp_up_th":
-            self.configs["kp_up_th"] = value
-            return json.dumps({"kp_up_th": value})
-        elif param_name == "kp_down_th":
-            self.configs["kp_down_th"] = value
-            return json.dumps({"kp_down_th": value})
-        elif param_name == "dir_th":
-            self.configs["dir_th"] = value
-            return json.dumps({"dir_th": value})
-        elif param_name == "autocorr_th":
-            self.configs["autocorr_th"] = value
-            return json.dumps({"autocorr_th": value})
-        elif param_name == "match_size":
-            self.configs["match_size"] = value
-            return json.dumps({"match_size": value})
-        elif param_name == "cursor_x":
-            self.configs["cursor_x"] = value
-            return json.dumps({"cursor_x": value})
-        elif param_name == "cursor_y":
-            self.configs["cursor_y"] = value
-            return json.dumps({"cursor_y": value})
-        elif param_name == "stabilization":
-            self.configs["stabilization"] = value
-            return json.dumps({"stabilization": value})
-        elif param_name == "tracking":
-            self.configs["tracking"] = value
-            return json.dumps({"tracking": value})
-        elif param_name == "track_fr_w":
-            self.configs["track_fr_w"] = value
-            self.configs_window.track_frame_size[1] = value
-            return json.dumps({"track_fr_w": value})
-        elif param_name == "track_fr_height":
-            self.configs["track_fr_h"] = value
-            self.configs_window.track_frame_size[0] = value
-            return json.dumps({"track_fr_h": value})
-        else:
-            self.console.appendPlainText("Wrong parameter name")  # Show sent command
-
-
-    def handle_key_press(self, event):
-        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
-            self.send_input()
-        else:
-            QPlainTextEdit.keyPressEvent(self.input_field, event)
-
-
-    def show_configs_window(self):
-        if self.configs_window.isVisible():
-            self.configs_window.hide()
-        else:
-            self.configs_window.show()
 
 
 class ConfigurationsWindow(QWidget):
@@ -1343,11 +1174,12 @@ class ConfigurationsWindow(QWidget):
         for key in configs:
             if fields is self.set_fields and (key == 'track_x' or key == "track_y"):
                 continue
-            elif (fields is self.get_fields
-                  and ((key == 'track_x' or key == 'cursor_x') and configs[key] > 1920)
-                  or ((key == "track_y" or key == 'cursor_y') and configs[key] > 1080)):
-                param = int(configs[key]) & 0x7FFF
-                fields[key].setText(str(param))
+            elif (fields is self.get_fields and
+                  (key == 'track_x' or key == 'cursor_x') or            #and configs[key] > 1920), and configs[key] > 1080)):
+                  (key == "track_y" or key == 'cursor_y')):
+                #param = int(configs[key]) & 0x7FFF
+                #fields[key].setText(str(param))
+                fields[key].setText(str(configs[key]))
             else:
                 fields[key].setText(str(configs[key]))
 
