@@ -345,13 +345,9 @@ class MainApp(QMainWindow):
         self.close_camera_button.clicked.connect(self.close_camera)
 
         self.configurations_window_btn = QPushButton("Configurations", self)
-        self.configurations_window_btn.setGeometry(1650, 150, 150, 50)
+        self.configurations_window_btn.setGeometry(1650, 250, 150, 50)
         self.configurations_window_btn.clicked.connect(self.show_configurations)
         self.configs_window = None
-        #self.configs_dock_widget = None
-        #self.configs_dock_widget = QDockWidget(self)
-        #self.configs_dock_widget.setAllowedAreas(Qt.AllDockWidgetAreas)
-        #self.configs_dock_widget.setFloating(True)
 
         # buffer for point coordinates
         self.coords_buffer = deque()
@@ -389,6 +385,7 @@ class MainApp(QMainWindow):
         self.device_id = 1234567890
         self.configs = {}
         self.configs_window = None
+        self.first_log = True
 
         self.tracking = False
         self.tracking_coord_count = 0
@@ -462,6 +459,7 @@ class MainApp(QMainWindow):
 
         self.joystick_thread.axis_changed.connect(self.send_joystick_coords)
         self.joystick_thread.started_moving.connect(self.start_joystick_motion)
+
         self.joystick_thread.stopped_moving.connect(self.stop_joystick_motion)
         self.joystick_thread.button_pushed.connect(self.handle_joystick_button)
 
@@ -579,7 +577,6 @@ class MainApp(QMainWindow):
             self.send_joystick_coords(dx, dy)
 
 
-
     def update_joystick_pointer(self, dx, dy):
         self.joystick_pointers_count += 1
         speed = 5
@@ -633,6 +630,9 @@ class MainApp(QMainWindow):
                 y_json = json.dumps({'cursor_y': y})
                 if self.serial_thread:
                     self.serial_thread.send_joystick_coordinates.emit(x_json, y_json)
+                    self.configs_window.request_one_parameter(param_name='cursor_x')
+                    self.configs_window.request_one_parameter(param_name='cursor_y')
+
         elif i == 1:
             print("RIGHT button pushed")
         elif i == 2:
@@ -805,6 +805,7 @@ class MainApp(QMainWindow):
         print("get_selected_port")
         return self.ports_combobox.currentText()
 
+
     def update_ports_widget(self):
         if len(self.open_ports) != 0:
             self.ports_combobox.clear()
@@ -953,6 +954,9 @@ class MainApp(QMainWindow):
 
 
     def receive_data_from_serial(self, text):
+        if self.first_log:
+            clear_log()
+            self.first_log = False
         write_log(text)
         if "Disconnect" in text:
             self.connect_btn.setText("Connect")
@@ -1070,7 +1074,7 @@ class MainApp(QMainWindow):
         self.close_camera()
         if self.configs_window:
             self.configs_window.close()
-        clear_log()
+        #clear_log()
         event.accept()
 
 
@@ -1091,8 +1095,16 @@ class ConfigurationsWindow(QWidget):
     def __init__(self, configs_dict, ser_th):
         super().__init__()
         self.setWindowTitle("Configurations")
-        self.setGeometry(900, 500, 400, 400)
-        self.setGeometry(800, 400, 500, 500)
+        self.setWindowFlags(
+            Qt.Tool |               # stays above main window
+            Qt.FramelessWindowHint  # optional (clean panel look)
+        )
+
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
+        self.setFocusPolicy(Qt.NoFocus)
+
+        #self.setGeometry(1450, 400, 400, 400)
+        self.resize(400, 400)
 
         self.layout = QVBoxLayout(self)
 
@@ -1169,6 +1181,13 @@ class ConfigurationsWindow(QWidget):
         self.set_values_in_input_fields(fields = self.set_fields, configs = self.buffer_configs)
         #self.timer.start(8000)
 
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._drag_pos = event.globalPos() - self.frameGeometry().topLeft()
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.LeftButton:
+            self.move(event.globalPos() - self._drag_pos)
 
     def set_values_in_input_fields(self, fields, configs):
         for key in configs:
@@ -1255,7 +1274,7 @@ class ConfigurationsWindow(QWidget):
             self.configs_dict[i] = self.buffer_configs[i]
 
         self.request_parameters_update()
-        time.sleep(4)
+        time.sleep(2)
 
         #self.ser_th.received_data_signal.connect(self.fill_get_fields)
         #self.timer.start(8000)
