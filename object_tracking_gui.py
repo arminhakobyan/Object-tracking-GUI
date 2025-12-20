@@ -240,7 +240,6 @@ class SerialThread(QThread):
             if self.serial is None or not self.serial.is_open:
                 print("Serial port not open or not connected.")
                 return
-            print("About to write...")
             self.serial.write(bytes_data)  # Send raw bytes
             print(f"Sent bytes: {bytes_data.hex()}")  # debug the hex
         except BaseException as e:
@@ -387,15 +386,12 @@ class MainApp(QMainWindow):
         self.configs_window = None
         self.first_log = True
 
-        self.tracking = False
         self.tracking_coord_count = 0
         self.receiving_tracking_coord_timer = QTimer(self)
         self.receiving_tracking_coord_timer.setInterval(10_000)  # 10 seconds
         self.receiving_tracking_coord_timer.timeout.connect(self.report_tracking_coord_count)
-        #self.receiving_tracking_coord_timer.start()
 
         self.joystick_pointers_count = 0
-
         self.joystick_stopped = False
 
         self.mouse_as_joystick = False
@@ -447,15 +443,13 @@ class MainApp(QMainWindow):
         self.track_video_label_x = 1070
         self.track_video_label_y = 50
 
-        self.pointer = QLabel(self)  # self.video_label
+        self.pointer = QLabel(self)
         self.pointer.setFixedSize(10, 10)  # (0, 0)
         self.pointer.setStyleSheet("background-color: red; border-radius: 5px;")
-        #self.pointer.move(self.resized_frame_shape[0], self.resized_frame_shape[1])
         self.pointer.move(self.video_label_deviation[0], self.video_label_deviation[1])
 
         # Start joystick thread
         self.joystick_thread = JoystickThread()
-        #self.joystick_thread.axis_changed.connect(self.update_joystick_pointer)
 
         self.joystick_thread.axis_changed.connect(self.send_joystick_coords)
         self.joystick_thread.started_moving.connect(self.start_joystick_motion)
@@ -513,8 +507,9 @@ class MainApp(QMainWindow):
                 self.tracking_coord_count = 0
             if self.configs_window:
                 self.configs_window.change_parameter_value(st, 'tracking')
+                time.sleep(0.1)
                 self.configs_window.request_one_parameter(param_name='tracking')
-                time.sleep(0.01)
+                time.sleep(0.1)
 
 
 
@@ -720,9 +715,9 @@ class MainApp(QMainWindow):
 
             if self.configs_window is not None:
                 self.cursor_x = int(
-                    self.configs_window.track_coord_x / self.scale_x + self.video_label_deviation[0] + 5)
+                    self.configs_window.track_coord_x / self.scale_x + self.video_label_deviation[0])   # + 5)
                 self.cursor_y = int(
-                        self.configs_window.track_coord_y / self.scale_y + self.video_label_deviation[1] + 5)
+                        self.configs_window.track_coord_y / self.scale_y + self.video_label_deviation[1])  # + 5)
                 self.track_frame_size = self.configs_window.track_frame_size
 
                 ui_stab_state = self.stabilization_toggle.isChecked()
@@ -832,7 +827,7 @@ class MainApp(QMainWindow):
         except Exception as e:
             print(e)
         try:
-            self.ser = Serial(port, int(baud_rate), timeout=1)
+            self.ser = Serial(port, int(baud_rate), timeout=0.1, write_timeout=0.1)                 #timeout=1)
             self.ser.close()
             self.ser.open()
             self.port_connected = True
@@ -849,9 +844,9 @@ class MainApp(QMainWindow):
             time.sleep(0.2)
             if self.configs_window:
                 self.configs_window.hide()                               #    self.console.configs_window.timer.stop()
+                self.configs_window = None
         else:
             port = self.get_selected_port()
-            print(self.get_selected_port())
 
             check_port = self.check_port_connection(port, self.baud_rate)
             print("check port", check_port)
@@ -860,7 +855,9 @@ class MainApp(QMainWindow):
                     self.ser.write(bytes([0xFE]))
                     response = ""
                     attempt = 0
+
                     while attempt < 10:
+
                         attempt += 1
                         time.sleep(0.5)
                         my_list = []
@@ -963,6 +960,7 @@ class MainApp(QMainWindow):
             self.port_connected = False
             try:
                 self.serial_thread.stop()
+                self.serial_thread = None
                 self.ser.close()
                 print("disconnected")
             except EOFError as e:
@@ -1193,32 +1191,22 @@ class ConfigurationsWindow(QWidget):
         for key in configs:
             if fields is self.set_fields and (key == 'track_x' or key == "track_y"):
                 continue
-            elif (fields is self.get_fields and
-                  (key == 'track_x' or key == 'cursor_x') or            #and configs[key] > 1920), and configs[key] > 1080)):
-                  (key == "track_y" or key == 'cursor_y')):
-                #param = int(configs[key]) & 0x7FFF
-                #fields[key].setText(str(param))
-                fields[key].setText(str(configs[key]))
             else:
                 fields[key].setText(str(configs[key]))
 
         if "track_fr_h" in configs:
-            track_frame_height = int(configs["track_fr_h"])
-            self.track_frame_size[0] = track_frame_height
+            self.track_frame_size[0] = int(configs["track_fr_h"])
         if "track_fr_w" in configs:
-            track_frame_width = int(configs["track_fr_w"])
-            self.track_frame_size[1] = track_frame_width
-
-        # self.track_frame_size = [track_frame_height, track_frame_width]
+            self.track_frame_size[1] = int(configs["track_fr_w"])
 
         if "track_x" in configs:
-            self.track_coord_x = int(configs["track_x"]) & 0x7FFF
+            self.track_coord_x = int(configs["track_x"])
         if "track_y" in configs:
-            self.track_coord_y = int(configs["track_y"]) & 0x7FFF
+            self.track_coord_y = int(configs["track_y"])
 
 
     def fill_get_fields(self, data):
-        print("fill get fields data")
+        #print("fill get fields data")
         if self.ser_th:
             if isinstance(data, str):
                 data = json.loads(data)
@@ -1230,7 +1218,7 @@ class ConfigurationsWindow(QWidget):
 
         self.set_fields[label_name].setText(str(val))
         if str(val) != "":
-            self.buffer_configs[label_name] = int(val)
+            self.buffer_configs[label_name] = float(val)
         else:
             self.buffer_configs[label_name] = 0
 
@@ -1260,7 +1248,8 @@ class ConfigurationsWindow(QWidget):
 
         #self.track_frame_size = [self.buffer_configs["track_fr_h"], self.buffer_configs["track_fr_w"]]
         #self.track_coord_x = self.buffer_configs["track_x"]
-        #self.track_coord_y = self.buffer_configs["track_y"]
+        #self.track_coord_y = self.buffer_confi
+        # gs["track_y"]
 
         for k in self.configs_dict:
             if self.configs_dict[k] != self.buffer_configs[k]:
@@ -1273,8 +1262,9 @@ class ConfigurationsWindow(QWidget):
         for i in self.configs_dict:
             self.configs_dict[i] = self.buffer_configs[i]
 
+        time.sleep(0.5)
         self.request_parameters_update()
-        time.sleep(2)
+        time.sleep(1)
 
         #self.ser_th.received_data_signal.connect(self.fill_get_fields)
         #self.timer.start(8000)
