@@ -72,35 +72,6 @@ def list_open_com_ports():     # skip bluetooth ports
     return open_ports
 
 
-class OptionCircle(QWidget):
-    def __init__(self, radius=10, parent=None):
-        super().__init__(parent)
-        self.radius = radius
-        self.selected = False
-        self.setFixedSize(radius * 2 + 4, radius * 2 + 4)
-
-    def select(self):
-        self.selected = True
-        self.update()
-
-    def deselect(self):
-        self.selected = False
-        self.update()
-
-    def mousePressEvent(self, event):
-        self.parent().circle_clicked(self)
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-
-        color = QColor(0, 200, 0) if self.selected else QColor(180, 180, 180)
-
-        painter.setBrush(color)
-        painter.setPen(Qt.black)
-
-        painter.drawEllipse(QRectF(2, 2, self.radius*2, self.radius*2))
-
 def write_to_serial(ser, js):
     print("write_to_serial", js)
     ser.write(bytes([0xff]))
@@ -224,7 +195,7 @@ class SerialThread(QThread):
                     my_list = []
                     data = ""
                     cnt = 0
-                    while self.serial.in_waiting > 0 and cnt < 3500:
+                    while self.serial.in_waiting > 0 and cnt < 3000:
                         d = self.serial.readline(self.serial.in_waiting)
                         my_list.append(d)
                         time.sleep(0.001)
@@ -337,12 +308,17 @@ class MainApp(QMainWindow):
         self.tracking_coord_label = QLabel("Number of tracking coordinates:", self)
         self.tracking_coord_label.setGeometry(800, 595, 150, 30)
         self.tracking_coord_editline = QLineEdit(self)
-        self.tracking_coord_editline.setGeometry(970, 600, 30, 20)
+        self.tracking_coord_editline.setGeometry(970, 600, 40, 20)
         self.tracking_coord_editline.setReadOnly(True)
         # self.tracking_coord_editline.textChanged.connect(self.report_tracking_coord_count)
         self.tracking_coord_editline.setText('0')
 
-        #self.video_label.setMouseTracking(True)
+        self.temperature_label = QLabel("Temperature", self)
+        self.temperature_label.setGeometry(885, 625, 70, 30)
+        self.temperature_line_edit = QLineEdit(self)
+        self.temperature_line_edit.setGeometry(970, 630, 40, 20)
+        self.temperature_line_edit.setReadOnly(True)
+        self.temperature_line_edit.setText('0')
 
         self.available_cameras_label = QLabel(self)
         self.available_cameras_label.setText("Available Cameras:")
@@ -421,6 +397,10 @@ class MainApp(QMainWindow):
         self.receiving_tracking_coord_timer = QTimer(self)
         self.receiving_tracking_coord_timer.setInterval(10_000)  # 10 seconds
         self.receiving_tracking_coord_timer.timeout.connect(self.report_tracking_coord_count)
+
+        self.temperature_timer = QTimer(self)
+        self.temperature_timer.setInterval(10_000)
+        self.temperature_timer.timeout.connect(self.report_temperature)
 
         self.joystick_pointers_count = 0
         self.joystick_stopped = False
@@ -768,19 +748,16 @@ class MainApp(QMainWindow):
 
                 ui_stab_state = self.stabilization_toggle.isChecked()
                 configs_stab = self.configs['stabilization']
-
                 if bool(configs_stab) != ui_stab_state:
                     self.update_stabilization_toggle(configs_stab)
 
                 ui_track_state = self.tracking_toggle.isChecked()
                 configs_track = self.configs['tracking']
-
                 if bool(configs_track) != ui_track_state:
                     self.update_tracking_toggle(configs_track)
 
                 ui_motion_state = self.motion_toggle.isChecked()
                 motion_track = self.configs['motion_det']
-
                 if bool(motion_track) != ui_motion_state:
                     self.update_motion_toggle(motion_track)
 
@@ -1010,6 +987,8 @@ class MainApp(QMainWindow):
         if "Disconnect" in text:
             self.connect_btn.setText("Connect")
             self.port_connected = False
+            if self.temperature_timer:
+                self.temperature_timer.stop()
             try:
                 self.serial_thread.stop()
                 self.serial_thread = None
@@ -1018,10 +997,13 @@ class MainApp(QMainWindow):
             except EOFError as e:
                 print(e)
 
-        if "{" in text and "}" in text and '[Config]' in text:
-            st = text.index('{')
-            end = text.index('}') + 1
-            t = text[st:end]
+        self.buffer_data += text
+        print("buffer: ", self.buffer_data)
+
+        if "{" in self.buffer_data and "}" in self.buffer_data and '[Config]' in self.buffer_data:
+            st = self.buffer_data.index('{')
+            end = self.buffer_data.index('}') + 1
+            t = self.buffer_data[st:end]
 
             self.configs = json.loads(t)
             configs_for_win = copy.copy(self.configs)
@@ -1032,16 +1014,20 @@ class MainApp(QMainWindow):
             if 'motion_det' in configs_for_win:
                 del configs_for_win['motion_det']
             if 'temperature' in configs_for_win:
+                self.temperature_line_edit.setText(str(configs_for_win['temperature']))
                 del configs_for_win['temperature']
             if self.configs_window is None:
                 self.configs_window = ConfigurationsWindow(configs_dict=configs_for_win, ser_th=self.serial_thread)
                 self.configs_window.setGeometry(1450, 400, 400, 400)
                 self.configs_window.show()
+                self.temperature_timer.start()
             else:
                 json_string = json.dumps(configs_for_win)
                 self.configs_window.fill_get_fields(json_string)
+            self.buffer_data = self.buffer_data.replace(t, "")
+            self.buffer_data = self.buffer_data.replace('[', "")
+            self.buffer_data = self.buffer_data.replace("[Config]", "")
 
-        self.buffer_data += text
         while '{' in self.buffer_data and '}' in self.buffer_data:
             ind1 = self.buffer_data.index('{')
             ind2 = self.buffer_data.index('}') + 1
@@ -1061,8 +1047,11 @@ class MainApp(QMainWindow):
                     self.configs['motion_det'] = sub_text_dict['motion_det']
                 elif 'temperature' in sub_text_dict:
                     self.configs['temperature'] = sub_text_dict['temperature']
+                    self.temperature_line_edit.setText(str(sub_text_dict['temperature']))
                 else:
                     self.configs_window.fill_get_fields(sub_text)
+
+                self.buffer_data = self.buffer_data.replace(sub_text, "")
 
             except json.decoder.JSONDecodeError as e:
                 print(f"json decoding error: {sub_text}")
@@ -1078,6 +1067,12 @@ class MainApp(QMainWindow):
         self.tracking_coord_editline.setText(str(per_second_coord_count))
         self.tracking_coord_count = 0
 
+
+    def report_temperature(self):
+        print("receive report temp")
+        to_json = json.dumps({"temperature": "%"})
+        self.serial_thread.send_text_signal.emit(to_json)
+        time.sleep(0.01)
 
 
     def send_buffer_coordinates(self, buffer):
@@ -1199,8 +1194,6 @@ class ConfigurationsWindow(QWidget):
                     parameters_layout.addWidget(label, i, 0)
                     parameters_layout.addWidget(get_field, i, 1)
                     parameters_layout.addWidget(lb_set, i, 3)
-                elif self.label_names[i] == "resolution":
-                    pass
                 else:
                     label = QLabel(self.label_names[i], self)
                     get_field = QLineEdit("", self)
@@ -1345,7 +1338,6 @@ def common_elements(dict1, key_list)-> list:
                 commonn_elems.append(el)
 
     return commonn_elems
-
 
 
 def equal_lists(first_list, second_list):
