@@ -10,6 +10,7 @@ from multiprocessing import Process
 import numpy as np
 import socket
 import copy
+from math import ceil
 from traceback import print_exc
 from serial import Serial
 from serial.tools import list_ports
@@ -188,7 +189,6 @@ class SerialThread(QThread):
 
     def run(self):
         print("run()")
-
         while self.running:
             try:
                 if self.serial.in_waiting > 0:
@@ -276,7 +276,8 @@ class MainApp(QMainWindow):
         self.video_label_deviation = [50, 50]
         self.video_label.setGeometry(self.video_label_deviation[0], self.video_label_deviation[1], 960, 540)
 
-        self.gray_frame = np.full((1920, 1080, 3), 128, dtype=np.uint8)   # (960, 540, 3)
+        self.gray_frame = np.full((1080, 1920, 3), 128, dtype=np.uint8)    # was (1920,1080, 3) VARDAN
+        #(960, 540, 3)
         self.gray_pixmap = QtGui.QPixmap(self.video_label.width(), self.video_label.height())
         self.gray_pixmap.fill(Qt.darkGray)
         self.video_label.setPixmap(self.gray_pixmap)
@@ -370,7 +371,7 @@ class MainApp(QMainWindow):
         self.camera_buttons = []
         self.selected_camera = 0
         self.track_frame_size = [150, 150]  # height, width
-        self.resized_frame_shape = [540, 960]
+        self.resized_frame_shape = [540, 960]   # original is- 1920 X 1080 -  frame[y][x] shape = height, width
         self.track_video = None
         self.track_region = None
         self.current_frame = None
@@ -388,7 +389,10 @@ class MainApp(QMainWindow):
         self.scale_y = 2  #None
         self.pointers_buffer = deque()
         self.pointer_coord = None
-        self.device_id = 1234567890
+
+        self.device_id = [i for i in range(10001, 10016)]   # 10001-10015         #1234567890
+        self.device_id.append(1234567890)
+
         self.configs = {}
         self.configs_window = None
         self.first_log = True
@@ -590,7 +594,7 @@ class MainApp(QMainWindow):
 
             target_x = mouse_x - 5 - self.video_label_deviation[0]
             target_y = mouse_y - 5 - self.video_label_deviation[1]
-            dx = (target_x - self.pointer_pos[0]) / 5
+            dx = (target_x - self.pointer_pos[0]) / 5    # speed=5
             dy = (target_y - self.pointer_pos[1]) / 5
 
             self.send_joystick_coords(dx, dy)
@@ -603,10 +607,11 @@ class MainApp(QMainWindow):
         self.pointer_pos[0] += dx * speed
         self.pointer_pos[1] += dy * speed
 
+        # self.resized_frame_shape = [540, 960]- y, x - height, width
         self.pointer_pos[0] = max(-5, min(self.resized_frame_shape[1] - 5, self.pointer_pos[0]))
         self.pointer_pos[1] = max(-5, min(self.resized_frame_shape[0] - 5, self.pointer_pos[1]))
 
-        self.pointer_move(coord_x = int(self.pointer_pos[0] + self.video_label_deviation[0]), coord_y = int(self.pointer_pos[1])+self.video_label_deviation[1])
+        self.pointer_move(coord_x = int(self.pointer_pos[0] + self.video_label_deviation[0]), coord_y = int(self.pointer_pos[1]+self.video_label_deviation[1]))
 
         pointer_x = {'cursor_x': int(((self.pointer_pos[0] + 5) * self.scale_x))}
         pointer_y = {'cursor_y': int(((self.pointer_pos[1] + 5) * self.scale_y))}
@@ -629,6 +634,7 @@ class MainApp(QMainWindow):
         y = pointer_y['cursor_y']
         if self.serial_thread:
             x_json = json.dumps(pointer_x)
+
             y_json = json.dumps(pointer_y)
             if not self.joystick_stopped:
                 self.serial_thread.send_joystick_coordinates_with_interval.emit(x_json, y_json)
@@ -726,25 +732,21 @@ class MainApp(QMainWindow):
     @pyqtSlot(np.ndarray)
     def update_frame(self, frame):
         if self.video_thread is not None:
-            self.original_frame_shape = frame.shape  # height, width, ch
-            frame = cv2.resize(frame, (self.resized_frame_shape[1], self.resized_frame_shape[0]))
+            self.original_frame_shape = frame.shape  # height-Y, width-X, ch - BGR
+            frame = cv2.resize(frame, (self.resized_frame_shape[1], self.resized_frame_shape[0]))  #dsize = (new_width, new_height)
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-            img = QtGui.QImage(frame.tobytes(), frame.shape[1], frame.shape[0], frame.shape[1] * 3,
+            img = QtGui.QImage(frame.tobytes(), frame.shape[1], frame.shape[0], frame.shape[1] * frame.shape[2],
                                QtGui.QImage.Format_RGB888)
             self.video_label.setPixmap(QtGui.QPixmap.fromImage(img))
 
-            self.scale_x = self.original_frame_shape[1] / self.resized_frame_shape[1]  # width
-            self.scale_y = self.original_frame_shape[0] / self.resized_frame_shape[0]  # height
-
-            if self.configs_window is not None:
-                self.cursor_x = int(
-                    self.configs_window.track_coord_x / self.scale_x + self.video_label_deviation[0])   # + 5)
-                self.cursor_y = int(
-                        self.configs_window.track_coord_y / self.scale_y + self.video_label_deviation[1])  # + 5)
-
-                track_windw_size = int(self.configs_window.get_fields['track_wndw_size'].text())
-                self.track_frame_size = [track_windw_size, track_windw_size]
+            self.scale_x = self.original_frame_shape[1] / self.resized_frame_shape[1]  # width,   becuase frame_shape[1]=width
+            self.scale_y = self.original_frame_shape[0] / self.resized_frame_shape[0]  # height           frame_shape[0]=height
+            x = 0
+            y = 0
+            if self.configs_window:
+                x = int(self.configs['track_x'] / self.scale_x + self.video_label_deviation[0])  # + 5)
+                y = int(self.configs['track_y'] / self.scale_y + self.video_label_deviation[1])  # + 5)
 
                 ui_stab_state = self.stabilization_toggle.isChecked()
                 configs_stab = self.configs['stabilization']
@@ -761,14 +763,16 @@ class MainApp(QMainWindow):
                 if bool(motion_track) != ui_motion_state:
                     self.update_motion_toggle(motion_track)
 
-            if self.configs_window and self.cursor_x and self.cursor_y:
-                track_windw_size = int(self.configs_window.get_fields['track_wndw_size'].text())
-                x_start = int(max(1, int(self.cursor_x - track_windw_size / 2 - self.video_label_deviation[0])))
-                x_end = int(min(self.resized_frame_shape[1],
-                                int(self.cursor_x + track_windw_size / 2 - self.video_label_deviation[0])))
-                y_start = int(max(0, int(self.cursor_y - track_windw_size / 2 - self.video_label_deviation[0])))
-                y_end = int(min(self.resized_frame_shape[0],
-                                int(self.cursor_y + track_windw_size / 2 - self.video_label_deviation[0])))
+            if self.configs and x and y:
+                track_windw_size = self.configs['track_wndw_size']
+                self.track_frame_size = [track_windw_size, track_windw_size]
+
+                x_start = int(max(1, int(x - track_windw_size / 2 - self.video_label_deviation[0])))
+                x_end = int(
+                    min(self.resized_frame_shape[1], int(x + track_windw_size / 2 - self.video_label_deviation[0])))
+                y_start = int(max(0, int(y - track_windw_size / 2 - self.video_label_deviation[0])))
+                y_end = int(
+                    min(self.resized_frame_shape[0], int(y + track_windw_size / 2 - self.video_label_deviation[0])))
 
                 self.track_video = frame[y_start:y_end, x_start:x_end]
 
@@ -784,10 +788,14 @@ class MainApp(QMainWindow):
             if self.track_frame_size == [0, 0] and self.track_video_label is not None:
                 self.track_video_label.clear()
 
+            if self.is_recording:
+                self.recorded_frames.append(frame)
             self.current_frame = frame
 
 
+
     def start_recording(self):
+        self.recorded_frames = []
         self.is_recording = True
         self.open_camera_button.setEnabled(False)
         self.start_button.setEnabled(False)
@@ -804,15 +812,16 @@ class MainApp(QMainWindow):
 
 
     def save_video(self):
+        print("save recorded video")
         if len(self.recorded_frames) == 0:
             return
 
-        filename, _ = QFileDialog.getSaveFileName(self, "Save Video", "", "mp4 Files (*.mp4v)")
+        filename, _ = QFileDialog.getSaveFileName(self, "Save Video", "", "mp4 Files (*.mp4v)")   # (*.mp4v)
         if filename:
             fshape = self.recorded_frames[0].shape
             fheight = int(fshape[1])
             fwidth = int(fshape[0])
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')        # (*.mp4v)
             self.video_writer = cv2.VideoWriter(filename, fourcc, 15, (fwidth, fheight), True)
             for frame in self.recorded_frames:
                 self.video_writer.write(frame)
@@ -863,7 +872,7 @@ class MainApp(QMainWindow):
             return True
         except Exception as e:
             print(e)
-            QMessageBox.warning(self, f"Error", "{e}")
+            QMessageBox.warning(self, "Error", f"{e}")
             return False
 
 
@@ -918,7 +927,7 @@ class MainApp(QMainWindow):
                     js = json.loads(response)
                     print(js.get('device_id'))
 
-                    if js.get('device_id') == self.device_id:
+                    if js.get('device_id') in self.device_id:
                         self.ser.write(bytes([0xFE]))
                         confirmation = ""
                         attempt = 0
@@ -965,6 +974,8 @@ class MainApp(QMainWindow):
                             self.serial_thread.send_text_signal.emit(configs_json)
 
                             self.joystick_thread.start()
+                    else:
+                        QMessageBox.critical(self, "Error", "Device Id doesn't match")
 
             except SerialException as e:
                 QMessageBox.critical(self, "Error", "Invalid port.")
@@ -987,6 +998,9 @@ class MainApp(QMainWindow):
         if "Disconnect" in text:
             self.connect_btn.setText("Connect")
             self.port_connected = False
+            self.update_motion_toggle(0)
+            self.update_tracking_toggle(0)
+            self.update_stabilization_toggle(0)
             if self.temperature_timer:
                 self.temperature_timer.stop()
             try:
@@ -1063,7 +1077,7 @@ class MainApp(QMainWindow):
 
     def report_tracking_coord_count(self):
         #print("Coordinates in last 10 seconds:", self.tracking_coord_count)
-        per_second_coord_count = int(self.tracking_coord_count / 10)
+        per_second_coord_count = ceil(self.tracking_coord_count / 10)
         self.tracking_coord_editline.setText(str(per_second_coord_count))
         self.tracking_coord_count = 0
 
