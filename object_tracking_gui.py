@@ -49,9 +49,25 @@ from PyQt5.QtWidgets import (
     QDockWidget,
 )
 
+"""
 def write_log(text: str, filename="device_log.txt"):
     with open(filename, "a") as f:     # encoding="utf-8"
         f.write(text + "\n")
+"""
+
+def write_log(text: str, filename="device_log.txt"):
+    try:
+        f = open(filename, 'a')
+        f.write(text + "\n")
+        f.flush()
+
+    except FileNotFoundError:
+        print(f"Error: The file {filename} was not found.")
+    except PermissionError:
+        print(f"Error: Permission denied. Unable to access {filename} file.")
+    except Exception as e:
+        # Catch any other unexpected exceptions
+        print(f"An unexpected error occurred: {e}")
 
 
 def clear_log(filename="device_log.txt"):
@@ -389,6 +405,7 @@ class MainApp(QMainWindow):
         self.scale_y = 2  #None
         self.pointers_buffer = deque()
         self.pointer_coord = None
+        self.log_file = "device_log.txt"
 
         self.device_id = [i for i in range(10001, 10016)]   # 10001-10015         #1234567890
         self.device_id.append(1234567890)
@@ -498,7 +515,7 @@ class MainApp(QMainWindow):
             #request param
             to_json = json.dumps({"stabilization": "%"})
             self.serial_thread.send_text_signal.emit(to_json)
-            time.sleep(0.01)
+            #time.sleep(0.01)
             #will be refreshed in self.configs in the function - receive_data_from_serial
 
 
@@ -819,8 +836,8 @@ class MainApp(QMainWindow):
         filename, _ = QFileDialog.getSaveFileName(self, "Save Video", "", "mp4 Files (*.mp4v)")   # (*.mp4v)
         if filename:
             fshape = self.recorded_frames[0].shape
-            fheight = int(fshape[1])
-            fwidth = int(fshape[0])
+            fheight = int(fshape[0])
+            fwidth = int(fshape[1])
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')        # (*.mp4v)
             self.video_writer = cv2.VideoWriter(filename, fourcc, 15, (fwidth, fheight), True)
             for frame in self.recorded_frames:
@@ -994,7 +1011,7 @@ class MainApp(QMainWindow):
         if self.first_log:
             clear_log()
             self.first_log = False
-        write_log(text)
+        write_log(text=text, filename = self.log_file)
         if "Disconnect" in text:
             self.connect_btn.setText("Connect")
             self.port_connected = False
@@ -1003,6 +1020,8 @@ class MainApp(QMainWindow):
             self.update_stabilization_toggle(0)
             if self.temperature_timer:
                 self.temperature_timer.stop()
+            f = open(self.log_file, "a")
+            f.close()
             try:
                 self.serial_thread.stop()
                 self.serial_thread = None
@@ -1148,12 +1167,13 @@ class MainApp(QMainWindow):
         if self.serial_thread:
             self.serial_thread.stop()
             self.serial_thread = None
+        f = open(self.log_file, 'a')
+        f.close()
         if self.is_recording:
             self.stop_recording()
         self.close_camera()
         if self.configs_window:
             self.configs_window.close()
-        #clear_log()
         event.accept()
 
 
@@ -1322,8 +1342,8 @@ class ConfigurationsWindow(QWidget):
                 config_to_json = json.dumps({k:self.buffer_configs[k]})
                 self.ser_th.send_text_signal.emit(config_to_json)
 
-        coords_json = json.dumps({'cursor_x':self.buffer_configs['cursor_x'], 'cursor_y':self.buffer_configs['cursor_y']})
-        self.ser_th.send_text_signal.emit(coords_json)
+        #vvv coords_json = json.dumps({'cursor_x':self.buffer_configs['cursor_x'], 'cursor_y':self.buffer_configs['cursor_y']})
+        #vvv self.ser_th.send_text_signal.emit(coords_json)
 
         for i in self.configs_dict:
             self.configs_dict[i] = self.buffer_configs[i]
