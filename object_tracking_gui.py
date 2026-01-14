@@ -410,6 +410,11 @@ class MainApp(QMainWindow):
         self.log_file = "device_log.txt"
         self.buffer_log = ""
 
+        # in this file will be written only tracking coordinates, without any text, just the numbers - {x},  {y}
+        # it is special for Armen :)))
+        self.coordinates_log = ""
+        self.coordinates_log_file = "coordinates_log.txt"
+
         self.log_file_timer = QTimer(self)
         self.log_file_timer.setInterval(10_000)  # 10 seconds
         self.log_file_timer.timeout.connect(self.flush_logs)
@@ -796,12 +801,12 @@ class MainApp(QMainWindow):
                 track_windw_size = self.configs['track_wndw_size']
                 self.track_frame_size = [track_windw_size, track_windw_size]
 
-                x_start = int(max(0, int(x- track_windw_size/4))) #+ self.video_label_deviation[0])))
+                x_start = int(max(0, int(x- track_windw_size/4)))
                 x_end = int(
-                    min(self.resized_frame_shape[1], int(x + 3/4*track_windw_size  ))) #+ self.video_label_deviation[0])))
-                y_start = int(max(0, int(y- track_windw_size/4))) # + self.video_label_deviation[0])))
+                    min(self.resized_frame_shape[1], int(x + 3/4*track_windw_size  )))
+                y_start = int(max(0, int(y- track_windw_size/4)))
                 y_end = int(
-                    min(self.resized_frame_shape[0], int(y + 3/4*track_windw_size))) # + self.video_label_deviation[0])))
+                    min(self.resized_frame_shape[0], int(y + 3/4*track_windw_size)))
 
                 self.track_video = frame[y_start:y_end, x_start:x_end]
 
@@ -813,7 +818,6 @@ class MainApp(QMainWindow):
                                                                                           QtGui.QImage.Format_RGB888)))
                     self.track_video_label.setGeometry(self.track_video_label_x, self.track_video_label_y,
                                                        track_windw_size, track_windw_size)  # x, y, w, h
-
             if self.track_frame_size == [0, 0] and self.track_video_label is not None:
                 self.track_video_label.clear()
 
@@ -1022,7 +1026,8 @@ class MainApp(QMainWindow):
 
     def receive_data_from_serial(self, text):
         if self.first_log:
-            clear_log()
+            clear_log(filename = self.log_file)
+            clear_log(filename = self.coordinates_log_file)
             self.first_log = False
         #write_log(text=text, filename = self.log_file)
         self.buffer_log += text
@@ -1038,9 +1043,11 @@ class MainApp(QMainWindow):
             if self.receiving_tracking_coord_timer.isActive():
                 self.receiving_tracking_coord_timer.stop()
             self.tracking_coord_editline.setText('0')
-
-            f = open(self.log_file, "a")
+            self.flush_logs()
+            f = open(self.log_file, 'a')
             f.close()
+            fl = open(self.coordinates_log_file, "a")
+            fl.close()
             try:
                 self.serial_thread.stop()
                 self.serial_thread = None
@@ -1088,8 +1095,11 @@ class MainApp(QMainWindow):
                 sub_text_dict = json.loads(sub_text)
                 if list(sub_text_dict.keys()) == ['track_x', 'track_y']:
                     self.tracking_coord_count += 1
-                    self.configs['track_x'] = sub_text_dict['track_x']
-                    self.configs['track_y'] = sub_text_dict['track_y']
+                    x = sub_text_dict['track_x']
+                    y = sub_text_dict['track_y']
+                    self.configs['track_x'] = x
+                    self.configs['track_y'] = y
+                    self.coordinates_log += f"{x}   {y}\n"
 
                 if 'tracking' in sub_text_dict:
                     self.configs['tracking'] = sub_text_dict['tracking']
@@ -1111,6 +1121,7 @@ class MainApp(QMainWindow):
                 print(f"Error: {sub_text}")
             self.buffer_data = self.buffer_data[ind2:]
 
+
     def flush_logs(self):
         print("flush_logs")
         if self.buffer_log:
@@ -1119,13 +1130,28 @@ class MainApp(QMainWindow):
                 f.write(self.buffer_log + "\n")
                 f.flush()
             except FileNotFoundError:
-                print(f"Error: The file {filename} was not found.")
+                print(f"Error: The file {self.log_file} was not found.")
             except PermissionError:
                 print(f"Error: Permission denied. Unable to access {filename} file.")
             except Exception as e:
                 print(f"An unexpected error occurred: {e}")
 
             self.buffer_log = ""
+
+        if self.coordinates_log:
+            try:
+                f = open(self.coordinates_log_file, 'a')
+                f.write(self.coordinates_log )
+                f.flush()
+            except FileNotFoundError:
+                print(f"Error: The file {self.coordinates_log_file} was not found.")
+            except PermissionError:
+                print(f"Error: Permission denied. Unable to access {filename} file.")
+            except Exception as e:
+                print(f"An unexpected error occurred: {e}")
+
+            self.coordinates_log = ""
+
 
 
     def report_tracking_coord_count(self):
@@ -1150,7 +1176,6 @@ class MainApp(QMainWindow):
 
     def send_coordinates_through_serial(self, coords: dict):
         coords_to_json = json.dumps(coords)
-
 
         self.serial_thread.send_text_signal.emit(coords_to_json)
         if self.configs != {} and self.configs_window is not None:
@@ -1204,6 +1229,8 @@ class MainApp(QMainWindow):
         self.flush_logs()
         f = open(self.log_file, 'a')
         f.close()
+        fl = open(self.coordinates_log_file, 'a')
+        fl.close()
         if self.is_recording:
             self.stop_recording()
         self.close_camera()
