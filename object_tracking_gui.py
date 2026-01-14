@@ -49,13 +49,15 @@ from PyQt5.QtWidgets import (
     QDockWidget,
 )
 
-"""
+
 def write_log(text: str, filename="device_log.txt"):
     with open(filename, "a") as f:     # encoding="utf-8"
         f.write(text + "\n")
-"""
 
+
+"""
 def write_log(text: str, filename="device_log.txt"):
+    print("writing in log file")
     try:
         f = open(filename, 'a')
         f.write(text + "\n")
@@ -68,6 +70,7 @@ def write_log(text: str, filename="device_log.txt"):
     except Exception as e:
         # Catch any other unexpected exceptions
         print(f"An unexpected error occurred: {e}")
+"""
 
 
 def clear_log(filename="device_log.txt"):
@@ -291,9 +294,8 @@ class MainApp(QMainWindow):
         self.video_label = QLabel(self)
         self.video_label_deviation = [50, 50]
         self.video_label.setGeometry(self.video_label_deviation[0], self.video_label_deviation[1], 960, 540)
-
+                                        # h     w    ch
         self.gray_frame = np.full((1080, 1920, 3), 128, dtype=np.uint8)    # was (1920,1080, 3) VARDAN
-        #(960, 540, 3)
         self.gray_pixmap = QtGui.QPixmap(self.video_label.width(), self.video_label.height())
         self.gray_pixmap.fill(Qt.darkGray)
         self.video_label.setPixmap(self.gray_pixmap)
@@ -387,7 +389,7 @@ class MainApp(QMainWindow):
         self.camera_buttons = []
         self.selected_camera = 0
         self.track_frame_size = [150, 150]  # height, width
-        self.resized_frame_shape = [540, 960]   # original is- 1920 X 1080 -  frame[y][x] shape = height, width
+        self.resized_frame_shape = [540, 960]   # original is- 1080 X 1920 -  frame[y][x] shape = height, width
         self.track_video = None
         self.track_region = None
         self.current_frame = None
@@ -406,6 +408,11 @@ class MainApp(QMainWindow):
         self.pointers_buffer = deque()
         self.pointer_coord = None
         self.log_file = "device_log.txt"
+        self.buffer_log = ""
+
+        self.log_file_timer = QTimer(self)
+        self.log_file_timer.setInterval(10_000)  # 10 seconds
+        self.log_file_timer.timeout.connect(self.flush_logs)
 
         self.device_id = [i for i in range(10001, 10016)]   # 10001-10015         #1234567890
         self.device_id.append(1234567890)
@@ -532,15 +539,16 @@ class MainApp(QMainWindow):
         if self.serial_thread:
             tr_json = json.dumps({'tracking': st})
             self.serial_thread.send_text_signal.emit(tr_json)
-            if st:
-               self.receiving_tracking_coord_timer.start()
+            if st and not self.receiving_tracking_coord_timer.isActive():
+                self.tracking_coord_count = 0
+                self.receiving_tracking_coord_timer.start()
             else:
                 self.receiving_tracking_coord_timer.stop()
                 self.tracking_coord_editline.setText('0')
                 self.tracking_coord_count = 0
             to_json = json.dumps({"tracking": "%"})
             self.serial_thread.send_text_signal.emit(to_json)
-            time.sleep(0.01)
+            #time.sleep(0.001)
 
 
     def update_tracking_toggle(self, state):
@@ -559,7 +567,7 @@ class MainApp(QMainWindow):
             # request param
             to_json = json.dumps({"motion_det": "%"})
             self.serial_thread.send_text_signal.emit(to_json)
-            time.sleep(0.01)
+            time.sleep(0.001)
             # will be refreshed in self.configs in the function - receive_data_from_serial
 
 
@@ -752,7 +760,7 @@ class MainApp(QMainWindow):
             self.original_frame_shape = frame.shape  # height-Y, width-X, ch - BGR
             frame = cv2.resize(frame, (self.resized_frame_shape[1], self.resized_frame_shape[0]))  #dsize = (new_width, new_height)
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
+                                                #     w                h
             img = QtGui.QImage(frame.tobytes(), frame.shape[1], frame.shape[0], frame.shape[1] * frame.shape[2],
                                QtGui.QImage.Format_RGB888)
             self.video_label.setPixmap(QtGui.QPixmap.fromImage(img))
@@ -762,8 +770,8 @@ class MainApp(QMainWindow):
             x = 0
             y = 0
             if self.configs_window:
-                x = int(self.configs['track_x'] / self.scale_x + self.video_label_deviation[0])  # + 5)
-                y = int(self.configs['track_y'] / self.scale_y + self.video_label_deviation[1])  # + 5)
+                x = int(self.configs['track_x'] / self.scale_x )     #+ self.video_label_deviation[0] # + 5)
+                y = int(self.configs['track_y'] / self.scale_y )     #+ self.video_label_deviation[1]  # + 5)
 
                 ui_stab_state = self.stabilization_toggle.isChecked()
                 configs_stab = self.configs['stabilization']
@@ -774,8 +782,12 @@ class MainApp(QMainWindow):
                 configs_track = self.configs['tracking']
                 if bool(configs_track) != ui_track_state:
                     self.update_tracking_toggle(configs_track)
+                if bool(configs_track) and not self.receiving_tracking_coord_timer.isActive():
+                    self.tracking_coord_count = 0
+                    self.receiving_tracking_coord_timer.start()
 
                 ui_motion_state = self.motion_toggle.isChecked()
+
                 motion_track = self.configs['motion_det']
                 if bool(motion_track) != ui_motion_state:
                     self.update_motion_toggle(motion_track)
@@ -784,12 +796,12 @@ class MainApp(QMainWindow):
                 track_windw_size = self.configs['track_wndw_size']
                 self.track_frame_size = [track_windw_size, track_windw_size]
 
-                x_start = int(max(1, int(x - track_windw_size / 2 - self.video_label_deviation[0])))
+                x_start = int(max(0, int(x- track_windw_size/4))) #+ self.video_label_deviation[0])))
                 x_end = int(
-                    min(self.resized_frame_shape[1], int(x + track_windw_size / 2 - self.video_label_deviation[0])))
-                y_start = int(max(0, int(y - track_windw_size / 2 - self.video_label_deviation[0])))
+                    min(self.resized_frame_shape[1], int(x + 3/4*track_windw_size  ))) #+ self.video_label_deviation[0])))
+                y_start = int(max(0, int(y- track_windw_size/4))) # + self.video_label_deviation[0])))
                 y_end = int(
-                    min(self.resized_frame_shape[0], int(y + track_windw_size / 2 - self.video_label_deviation[0])))
+                    min(self.resized_frame_shape[0], int(y + 3/4*track_windw_size))) # + self.video_label_deviation[0])))
 
                 self.track_video = frame[y_start:y_end, x_start:x_end]
 
@@ -985,12 +997,13 @@ class MainApp(QMainWindow):
                             self.serial_thread = SerialThread(self.ser)
                             self.serial_thread.received_data_signal.connect(self.receive_data_from_serial)
                             self.serial_thread.start()
-                            time.sleep(1)
+                            time.sleep(0.1)
 
                             configs_json = json.dumps({"parameters": "%"})
                             self.serial_thread.send_text_signal.emit(configs_json)
 
                             self.joystick_thread.start()
+                            self.log_file_timer.start()
                     else:
                         QMessageBox.critical(self, "Error", "Device Id doesn't match")
 
@@ -1011,15 +1024,21 @@ class MainApp(QMainWindow):
         if self.first_log:
             clear_log()
             self.first_log = False
-        write_log(text=text, filename = self.log_file)
+        #write_log(text=text, filename = self.log_file)
+        self.buffer_log += text
         if "Disconnect" in text:
             self.connect_btn.setText("Connect")
             self.port_connected = False
             self.update_motion_toggle(0)
             self.update_tracking_toggle(0)
             self.update_stabilization_toggle(0)
-            if self.temperature_timer:
+            if self.temperature_timer.isActive():
                 self.temperature_timer.stop()
+            self.temperature_line_edit.setText('0')
+            if self.receiving_tracking_coord_timer.isActive():
+                self.receiving_tracking_coord_timer.stop()
+            self.tracking_coord_editline.setText('0')
+
             f = open(self.log_file, "a")
             f.close()
             try:
@@ -1092,6 +1111,21 @@ class MainApp(QMainWindow):
                 print(f"Error: {sub_text}")
             self.buffer_data = self.buffer_data[ind2:]
 
+    def flush_logs(self):
+        print("flush_logs")
+        if self.buffer_log:
+            try:
+                f = open(self.log_file, 'a')
+                f.write(self.buffer_log + "\n")
+                f.flush()
+            except FileNotFoundError:
+                print(f"Error: The file {filename} was not found.")
+            except PermissionError:
+                print(f"Error: Permission denied. Unable to access {filename} file.")
+            except Exception as e:
+                print(f"An unexpected error occurred: {e}")
+
+            self.buffer_log = ""
 
 
     def report_tracking_coord_count(self):
@@ -1167,6 +1201,7 @@ class MainApp(QMainWindow):
         if self.serial_thread:
             self.serial_thread.stop()
             self.serial_thread = None
+        self.flush_logs()
         f = open(self.log_file, 'a')
         f.close()
         if self.is_recording:
