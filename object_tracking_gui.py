@@ -210,25 +210,13 @@ class SerialThread(QThread):
         print("run()")
         while self.running:
             try:
-                if self.serial.in_waiting > 0:
-                    my_list = []
-                    data = ""
-                    cnt = 0
-                    while self.serial.in_waiting > 0 and cnt < 3000:
-                        d = self.serial.readline(self.serial.in_waiting)
-                        my_list.append(d)
-                        time.sleep(0.001)
-                        cnt  += 1
-                    for i in my_list:
-                        data += str(i.decode("utf-8"))
+                data = self.serial.read(self.serial.in_waiting or 1)
+                if data:
+                    text = data.decode("utf-8", errors="ignore")
+                    self.received_data_signal.emit(text)
 
-                    print("received: ", data)
-
-                    data = data.strip()
-                    self.received_data_signal.emit(data)
-
-            except Exception as e:
-                print(f"Error: {e}")
+            except serial.SerialException:
+                break
 
 
     def send_joystick_coord_with_interval(self, json_x, json_y):
@@ -898,7 +886,7 @@ class MainApp(QMainWindow):
         except Exception as e:
             print(e)
         try:
-            self.ser = Serial(port, int(baud_rate), timeout=0.1, write_timeout=0.1)                 #timeout=1)
+            self.ser = Serial(port, int(baud_rate), timeout=0, write_timeout=0.1)                 #timeout=1)
             self.ser.close()
             self.ser.open()
             self.port_connected = True
@@ -914,7 +902,7 @@ class MainApp(QMainWindow):
             self.ser.write(bytes([0xFE]))
             time.sleep(0.2)
             if self.configs_window:
-                self.configs_window.hide()                               #    self.console.configs_window.timer.stop()
+                self.configs_window.hide()                                   # self.console.configs_window.timer.stop()
                 self.configs_window = None
         else:
             port = self.get_selected_port()
@@ -1265,6 +1253,7 @@ class ConfigurationsWindow(QWidget):
         self.setFocusPolicy(Qt.NoFocus)
 
         self.layout = QVBoxLayout(self)
+
         self.ser_th = ser_th
 
         if configs_dict != {}:
@@ -1280,33 +1269,51 @@ class ConfigurationsWindow(QWidget):
             self.set_fields = {}
 
             parameters_layout = QGridLayout()
+            parameters_layout.setHorizontalSpacing(5)
+            parameters_layout.setContentsMargins(0, 0, 0, 0)
             for i in range(len(self.label_names)):
+                label = QLabel(self.label_names[i], self)
+                get_edit = QLineEdit("", self)
+                get_edit.setReadOnly(True)
+                set_label = QLabel("SET", self)
                 if self.label_names[i] == "track_x" or self.label_names[i] == "track_y":
-                    label = QLabel(self.label_names[i], self)
-                    get_field = QLineEdit("", self)
-                    get_field.setReadOnly(True)
-                    lb_set = QLabel("READ ONLY", self)
-                    self.get_fields[self.label_names[i]] = get_field
-                    parameters_layout.addWidget(label, i, 0)
-                    parameters_layout.addWidget(get_field, i, 1)
-                    parameters_layout.addWidget(lb_set, i, 3)
+                    set_edit = QLabel("READ ONLY", self)
+                elif self.label_names[i] == "resolution":
+                    set_edit = QHBoxLayout(self)
+                    self.rb_full_hd = QRadioButton("FHD", self)
+                    self.rb_hd = QRadioButton("HD", self)
+                    self.rb_full_hd.toggled.connect(self.update_resolution_fhd)
+                    self.rb_hd.toggled.connect(self.update_resolution_hd)
+                    set_edit.addWidget(self.rb_full_hd)
+                    set_edit.addWidget(self.rb_hd)
+                elif self.label_names[i] == "frame_edge":
+                    #set_edit = QHBoxLayout(self)
+                    self.frame_edge_combo = QComboBox(self)
+                    self.frame_edge_combo.addItems([str(i) for i in range(6)])  # 0–5
+                    self.frame_edge_combo.currentIndexChanged.connect(self.update_frame_edge)
+                    #set_edit.addWidget(self.frame_edge_combo)
+                    set_edit = self.frame_edge_combo
+                elif self.label_names[i] == "track_wndw_size":
+                    self.track_wnd_size_combo = QComboBox(self)
+                    self.track_wnd_sizes = ['32', '64', '128']
+                    self.track_wnd_size_combo.addItems(self.track_wnd_sizes)
+                    self.track_wnd_size_combo.currentIndexChanged.connect(self.update_track_wnd_size)
+                    set_edit = self.track_wnd_size_combo
                 else:
-                    label = QLabel(self.label_names[i], self)
-                    get_field = QLineEdit("", self)
-                    get_field.setReadOnly(True)
-                    lb_set = QLabel("SET", self)
+                    set_edit = QLineEdit("", self)
+                    set_edit.setValidator(QIntValidator(0, 99999))
+                    set_edit.textChanged.connect(partial(self.change_parameter_value, label_name=self.label_names[i]))
 
-                    set_field = QLineEdit("", self)
-                    set_field.setValidator(QIntValidator(0, 99999))
+                self.get_fields[self.label_names[i]] = get_edit
+                self.set_fields[self.label_names[i]] = set_edit
 
-                    set_field.textChanged.connect(partial(self.change_parameter_value, label_name=self.label_names[i]))
-                    self.get_fields[self.label_names[i]] = get_field
-                    self.set_fields[self.label_names[i]] = set_field
-
-                    parameters_layout.addWidget(label, i, 0)
-                    parameters_layout.addWidget(get_field, i, 1)
-                    parameters_layout.addWidget(lb_set, i, 2)
-                    parameters_layout.addWidget(set_field, i, 3)
+                parameters_layout.addWidget(label, i, 0)
+                parameters_layout.addWidget(get_edit, i, 1)
+                parameters_layout.addWidget(set_label, i, 2)
+                if isinstance(set_edit, QHBoxLayout):
+                    parameters_layout.addLayout(set_edit, i, 3)
+                else:
+                    parameters_layout.addWidget(set_edit, i, 3)
 
                 self.layout.addLayout(parameters_layout)
 
@@ -1349,9 +1356,17 @@ class ConfigurationsWindow(QWidget):
         for key in configs:
             if fields is self.set_fields and (key == 'track_x' or key == "track_y"):
                 continue
+            elif fields is self.set_fields and key == 'resolution':
+                if int(configs["resolution"]) == 1:
+                    self.rb_full_hd.setChecked(True)
+                else:
+                    self.rb_hd.setChecked(True)
+            elif fields is self.set_fields and key == 'frame_edge':
+               self.frame_edge_combo.setCurrentIndex(int(configs["frame_edge"]))
+            elif fields is self.set_fields and key == 'track_wndw_size':
+                self.track_wnd_size_combo.setCurrentText(str(configs["track_wndw_size"]))
             else:
                 fields[key].setText(str(configs[key]))
-
         if "track_x" in configs:
             self.track_coord_x = int(configs["track_x"])
         if "track_y" in configs:
@@ -1359,7 +1374,6 @@ class ConfigurationsWindow(QWidget):
 
 
     def fill_get_fields(self, data):
-        #print("fill get fields data")
         if self.ser_th:
             if isinstance(data, str):
                 data = json.loads(data)
@@ -1374,6 +1388,31 @@ class ConfigurationsWindow(QWidget):
             self.buffer_configs[label_name] = float(val)
         else:
             self.buffer_configs[label_name] = 0
+
+    def update_resolution_fhd(self, selected):
+        res = 1 if selected else 0
+        self.buffer_configs['resolution'] = 1
+        self.configs_dict['resolution'] = 1
+        res_json = json.dumps({'resolution': res})
+        self.ser_th.send_text_signal.emit(res_json)
+        self.request_one_parameter('resolution')
+
+
+    def update_resolution_hd(self, selected):
+        res = 0 if selected else 1
+        self.buffer_configs['resolution'] = 0
+        self.configs_dict['resolution'] = 0
+        res_json = json.dumps({'resolution': res})
+        self.ser_th.send_text_signal.emit(res_json)
+        self.request_one_parameter('resolution')
+
+
+    def update_frame_edge(self, ind):
+        self.buffer_configs['frame_edge'] = ind
+
+    def update_track_wnd_size(self, ind):
+        size = int(self.track_wnd_sizes[ind])
+        self.buffer_configs['track_wndw_size'] = size
 
 
     def request_parameters_update(self):
@@ -1396,7 +1435,7 @@ class ConfigurationsWindow(QWidget):
     def on_apply_click(self):
         print("apply")
         for k in self.set_fields:
-            if self.set_fields[k].text() == "":
+            if isinstance(self.set_fields[k], QLineEdit) and self.set_fields[k].text() == "":
                 self.set_fields[k].setText('0')
 
         for k in self.configs_dict:
