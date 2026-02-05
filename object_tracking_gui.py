@@ -94,13 +94,13 @@ def list_open_com_ports():     # skip bluetooth ports
 
 def write_to_serial(ser, js):
     print("write_to_serial", js)
-    ser.write(bytes([0xff]))
+    #ser.write(bytes([0xff]))
 
     for char in js:
         ser.write(char.encode())
         time.sleep(0.0001)
 
-    ser.write(bytes([0xff]))
+    #ser.write(bytes([0xff]))
 
 
 class Toggle(QCheckBox):
@@ -206,23 +206,47 @@ class SerialThread(QThread):
         print("SerialThread initialized")
 
 
+    """
     def run(self):
         print("run()")
         while self.running:
             try:
-                data = self.serial.read(self.serial.in_waiting or 1)
+                #data = self.serial.read(self.serial.in_waiting or 1)
+                data = self.serial.read(1024)
                 if data:
                     text = data.decode("utf-8", errors="ignore")
                     self.received_data_signal.emit(text)
 
             except serial.SerialException:
                 break
+    """
+
+    def run(self):
+        buffer = bytearray()
+
+        while self.running:
+            try:
+                data = self.serial.read(1024)  # waits up to timeout
+                if not data:
+                    continue
+
+                buffer.extend(data)
+
+                text = buffer.decode("utf-8", errors="ignore")
+                buffer.clear()
+
+                self.received_data_signal.emit(text)
+
+            except serial.SerialException:
+                break
+
 
 
     def send_joystick_coord_with_interval(self, json_x, json_y):
         now = time.time()
         if now - self.coord_last_sent >= self.coord_send_interval:
             self.send_joystick_coord(json_x, json_y)
+
 
     def send_joystick_coord(self, json_x, json_y):
         now = time.time()
@@ -326,6 +350,10 @@ class MainApp(QMainWindow):
         self.temperature_line_edit.setGeometry(970, 630, 40, 20)
         self.temperature_line_edit.setReadOnly(True)
         self.temperature_line_edit.setText('0')
+        self.tracking_coord_label.hide()
+        self.tracking_coord_editline.hide()
+        self.temperature_label.hide()
+        self.temperature_line_edit.hide()
 
         self.available_cameras_label = QLabel(self)
         self.available_cameras_label.setText("Available Cameras:")
@@ -397,6 +425,8 @@ class MainApp(QMainWindow):
         self.pointer_coord = None
         self.log_file = "device_log.txt"
         self.buffer_log = ""
+        # for track_coordinates_number and temperature widgets
+        self.show_widgets = False
 
         # in this file will be written only tracking coordinates, without any text, just the numbers - {x},  {y}
         # it is special for Armen :)))
@@ -497,7 +527,19 @@ class MainApp(QMainWindow):
         if event.key() == Qt.Key_T:
             self.mouse_as_joystick = not self.mouse_as_joystick
             print("Mouse joystick mode:", self.mouse_as_joystick)
-
+        elif event.key() == Qt.Key_K:
+            if not self.show_widgets:
+                self.tracking_coord_label.show()
+                self.tracking_coord_editline.show()
+                self.temperature_label.show()
+                self.temperature_line_edit.show()
+                self.show_widgets = True
+            else:
+                self.tracking_coord_label.hide()
+                self.tracking_coord_editline.hide()
+                self.temperature_label.hide()
+                self.temperature_line_edit.hide()
+                self.show_widgets = False
 
 
     def mouseReleaseEvent(self, event):
@@ -652,7 +694,6 @@ class MainApp(QMainWindow):
         y = pointer_y['cursor_y']
         if self.serial_thread:
             x_json = json.dumps(pointer_x)
-
             y_json = json.dumps(pointer_y)
             if not self.joystick_stopped:
                 self.serial_thread.send_joystick_coordinates_with_interval.emit(x_json, y_json)
@@ -665,17 +706,20 @@ class MainApp(QMainWindow):
         if i == 0:
             print("joystick button pushed")
             if self.pointer_coord:
-                x = 0x8000 | self.pointer_coord['cursor_x']
-                y = 0x8000 | self.pointer_coord['cursor_y']
+                x = self.pointer_coord['cursor_x']
+                y = self.pointer_coord['cursor_y']
                 self.cursor_x = self.pointer_coord['cursor_x']/self.scale_x + self.video_label_deviation[0] + 5
                 self.cursor_y = self.pointer_coord['cursor_y']/self.scale_y + self.video_label_deviation[1] + 5
-                x_json = json.dumps({'cursor_x': x})
-                y_json = json.dumps({'cursor_y': y})
+                x_json = json.dumps({'track_x': x})
+                y_json = json.dumps({'track_y': y})
                 if self.serial_thread and self.configs_window:
                     self.serial_thread.send_joystick_coordinates.emit(x_json, y_json)
+                    self.configs_window.change_parameter_value(x, 'track_x')
+                    self.configs_window.change_parameter_value(y, 'track_y')
+                    self.configs_window.request_one_parameter(param_name='track_x')
+                    self.configs_window.request_one_parameter(param_name='track_y')
                     self.configs_window.request_one_parameter(param_name='cursor_x')
                     self.configs_window.request_one_parameter(param_name='cursor_y')
-
         elif i == 1:
             print("RIGHT button pushed")
         elif i == 2:
@@ -763,8 +807,8 @@ class MainApp(QMainWindow):
             x = 0
             y = 0
             if self.configs_window:
-                x = int(self.configs['track_x'] / self.scale_x )     #+ self.video_label_deviation[0] # + 5)
-                y = int(self.configs['track_y'] / self.scale_y )     #+ self.video_label_deviation[1]  # + 5)
+                x = self.configs['track_x'] / self.scale_x
+                y = self.configs['track_y'] / self.scale_y
 
                 ui_stab_state = self.stabilization_toggle.isChecked()
                 configs_stab = self.configs['stabilization']
@@ -899,7 +943,8 @@ class MainApp(QMainWindow):
 
     def connect_port(self):
         if self.port_connected and self.ser is not None and self.ser.is_open:
-            self.ser.write(bytes([0xFE]))
+            # send 'D' - Disconnect
+            self.ser.write(bytes([0x44]))
             time.sleep(0.2)
             if self.configs_window:
                 self.configs_window.hide()                                   # self.console.configs_window.timer.stop()
@@ -911,12 +956,12 @@ class MainApp(QMainWindow):
             print("check port", check_port)
             try:
                 if check_port:
-                    self.ser.write(bytes([0xFE]))
+                    # send 'I' - request for device_id
+                    self.ser.write(bytes([0x49]))
                     response = ""
                     attempt = 0
 
                     while attempt < 10:
-
                         attempt += 1
                         time.sleep(0.5)
                         my_list = []
@@ -949,7 +994,8 @@ class MainApp(QMainWindow):
                     print(js.get('device_id'))
 
                     if js.get('device_id') in self.device_id:
-                        self.ser.write(bytes([0xFE]))
+                        # send 'C' - Connected
+                        self.ser.write(bytes([0x43]))
                         confirmation = ""
                         attempt = 0
                         while attempt < 10:
@@ -1072,7 +1118,6 @@ class MainApp(QMainWindow):
                 json_string = json.dumps(configs_for_win)
                 self.configs_window.fill_get_fields(json_string)
             self.buffer_data = self.buffer_data.replace(t, "")
-            self.buffer_data = self.buffer_data.replace('[', "")
             self.buffer_data = self.buffer_data.replace("[Config]", "")
 
         while '{' in self.buffer_data and '}' in self.buffer_data:
@@ -1107,7 +1152,6 @@ class MainApp(QMainWindow):
                 print(f"json decoding error: {sub_text}")
             except Exception as e:
                 print(f"Error: {sub_text}")
-            self.buffer_data = self.buffer_data[ind2:]
 
 
     def flush_logs(self):
@@ -1252,6 +1296,8 @@ class ConfigurationsWindow(QWidget):
         self.setAttribute(Qt.WA_ShowWithoutActivating)
         self.setFocusPolicy(Qt.NoFocus)
 
+        self._drag_pos = None
+
         self.layout = QVBoxLayout(self)
 
         self.ser_th = ser_th
@@ -1276,9 +1322,7 @@ class ConfigurationsWindow(QWidget):
                 get_edit = QLineEdit("", self)
                 get_edit.setReadOnly(True)
                 set_label = QLabel("SET", self)
-                if self.label_names[i] == "track_x" or self.label_names[i] == "track_y":
-                    set_edit = QLabel("READ ONLY", self)
-                elif self.label_names[i] == "resolution":
+                if self.label_names[i] == "resolution":
                     set_edit = QHBoxLayout(self)
                     self.rb_full_hd = QRadioButton("FHD", self)
                     self.rb_hd = QRadioButton("HD", self)
@@ -1343,20 +1387,9 @@ class ConfigurationsWindow(QWidget):
         #self.timer.start(8000)
 
 
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self._drag_pos = event.globalPos() - self.frameGeometry().topLeft()
-
-
-    def mouseMoveEvent(self, event):
-        if event.buttons() & Qt.LeftButton:
-            self.move(event.globalPos() - self._drag_pos)
-
     def set_values_in_input_fields(self, fields, configs):
         for key in configs:
-            if fields is self.set_fields and (key == 'track_x' or key == "track_y"):
-                continue
-            elif fields is self.set_fields and key == 'resolution':
+            if fields is self.set_fields and key == 'resolution':
                 if int(configs["resolution"]) == 1:
                     self.rb_full_hd.setChecked(True)
                 else:
@@ -1367,10 +1400,6 @@ class ConfigurationsWindow(QWidget):
                 self.track_wnd_size_combo.setCurrentText(str(configs["track_wndw_size"]))
             else:
                 fields[key].setText(str(configs[key]))
-        if "track_x" in configs:
-            self.track_coord_x = int(configs["track_x"])
-        if "track_y" in configs:
-            self.track_coord_y = int(configs["track_y"])
 
 
     def fill_get_fields(self, data):
@@ -1388,6 +1417,7 @@ class ConfigurationsWindow(QWidget):
             self.buffer_configs[label_name] = float(val)
         else:
             self.buffer_configs[label_name] = 0
+
 
     def update_resolution_fhd(self, selected):
         res = 1 if selected else 0
@@ -1420,10 +1450,22 @@ class ConfigurationsWindow(QWidget):
         to_json = json.dumps({"parameters": "%"})
         self.ser_th.send_text_signal.emit(to_json)
 
+
     def request_one_parameter(self, param_name):
         print("request_one_parameter")
         to_json = json.dumps({f"{param_name}": "%"})
         self.ser_th.send_text_signal.emit(to_json)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._drag_pos = event.globalPos() - self.frameGeometry().topLeft()
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.LeftButton:
+            self.move(event.globalPos() - self._drag_pos)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_pos = None
 
 
     def on_ok_click(self):
@@ -1442,19 +1484,11 @@ class ConfigurationsWindow(QWidget):
             if self.configs_dict[k] != self.buffer_configs[k]:
                 config_to_json = json.dumps({k:self.buffer_configs[k]})
                 self.ser_th.send_text_signal.emit(config_to_json)
-
-        #vvv coords_json = json.dumps({'cursor_x':self.buffer_configs['cursor_x'], 'cursor_y':self.buffer_configs['cursor_y']})
-        #vvv self.ser_th.send_text_signal.emit(coords_json)
-
-        for i in self.configs_dict:
-            self.configs_dict[i] = self.buffer_configs[i]
+                self.configs_dict[k] = self.buffer_configs[k]
 
         time.sleep(0.1)
         self.request_parameters_update()
         time.sleep(0.5)
-
-        #self.ser_th.received_data_signal.connect(self.fill_get_fields)
-        #self.timer.start(8000)
 
 
     def on_cancel_click(self):
