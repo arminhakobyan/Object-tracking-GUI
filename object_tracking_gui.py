@@ -234,7 +234,6 @@ class SerialThread(QThread):
 
                 text = buffer.decode("utf-8", errors="ignore")
                 buffer.clear()
-
                 self.received_data_signal.emit(text)
 
             except serial.SerialException:
@@ -527,7 +526,7 @@ class MainApp(QMainWindow):
         if event.key() == Qt.Key_T:
             self.mouse_as_joystick = not self.mouse_as_joystick
             print("Mouse joystick mode:", self.mouse_as_joystick)
-        elif event.key() == Qt.Key_K:
+        elif event.key() == Qt.Key_H:
             if not self.show_widgets:
                 self.tracking_coord_label.show()
                 self.tracking_coord_editline.show()
@@ -945,7 +944,7 @@ class MainApp(QMainWindow):
         if self.port_connected and self.ser is not None and self.ser.is_open:
             # send 'D' - Disconnect
             self.ser.write(bytes([0x44]))
-            time.sleep(0.2)
+            time.sleep(0.3)
             if self.configs_window:
                 self.configs_window.hide()                                   # self.console.configs_window.timer.stop()
                 self.configs_window = None
@@ -1078,6 +1077,7 @@ class MainApp(QMainWindow):
                 self.receiving_tracking_coord_timer.stop()
             self.tracking_coord_editline.setText('0')
             self.flush_logs()
+            self.buffer_data = ''
             f = open(self.log_file, 'a')
             f.close()
             fl = open(self.coordinates_log_file, "a")
@@ -1087,8 +1087,10 @@ class MainApp(QMainWindow):
                 self.serial_thread = None
                 self.ser.close()
                 print("disconnected")
+                return
             except EOFError as e:
                 print(e)
+
 
         self.buffer_data += text
         print("buffer: ", self.buffer_data)
@@ -1107,7 +1109,8 @@ class MainApp(QMainWindow):
             if 'motion_det' in configs_for_win:
                 del configs_for_win['motion_det']
             if 'temperature' in configs_for_win:
-                self.temperature_line_edit.setText(str(configs_for_win['temperature']))
+                tmp = round(configs_for_win['temperature'])
+                self.temperature_line_edit.setText(str(tmp))
                 del configs_for_win['temperature']
             if self.configs_window is None:
                 self.configs_window = ConfigurationsWindow(configs_dict=configs_for_win, ser_th=self.serial_thread)
@@ -1141,8 +1144,9 @@ class MainApp(QMainWindow):
                 elif 'motion_det' in sub_text_dict:
                     self.configs['motion_det'] = sub_text_dict['motion_det']
                 elif 'temperature' in sub_text_dict:
-                    self.configs['temperature'] = sub_text_dict['temperature']
-                    self.temperature_line_edit.setText(str(sub_text_dict['temperature']))
+                    tmp = round(sub_text_dict['temperature'])
+                    self.configs['temperature'] = tmp
+                    self.temperature_line_edit.setText(str(tmp))
                 else:
                     self.configs_window.fill_get_fields(sub_text)
 
