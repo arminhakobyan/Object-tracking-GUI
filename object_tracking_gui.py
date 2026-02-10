@@ -322,18 +322,24 @@ class MainApp(QMainWindow):
         self.stabilization_toggle = Toggle(self)
         self.stabilization_toggle.setGeometry(970, 20, 10, 5)
         self.stabilization_toggle.stateChanged.connect(self.stabilization_on_off)
+        self.stabilization_label.hide()
+        self.stabilization_toggle.hide()
 
         self.tracking_label = QLabel('Tracking', self)
         self.tracking_label.setGeometry(795, 15, 100, 30)
         self.tracking_toggle = Toggle(self)
         self.tracking_toggle.setGeometry(840, 20, 10, 5)
         self.tracking_toggle.stateChanged.connect(self.tracking_on_off)
+        self.tracking_label.hide()
+        self.tracking_toggle.hide()
 
         self.motion_label = QLabel('Motion', self)
         self.motion_label.setGeometry(670, 15, 100, 30)
         self.motion_toggle = Toggle(self)
         self.motion_toggle.setGeometry(710, 20, 10, 5)
         self.motion_toggle.stateChanged.connect(self.motion_on_off)
+        self.motion_label.hide()
+        self.motion_toggle.hide()
 
         self.tracking_coord_label = QLabel("Number of tracking coordinates:", self)
         self.tracking_coord_label.setGeometry(800, 595, 150, 30)
@@ -386,6 +392,7 @@ class MainApp(QMainWindow):
 
         self.configurations_window_btn = QPushButton("Configurations", self)
         self.configurations_window_btn.setGeometry(1650, 250, 150, 50)
+        self.configurations_window_btn.hide()
         self.configurations_window_btn.clicked.connect(self.show_configurations)
         self.configs_window = None
 
@@ -1067,9 +1074,17 @@ class MainApp(QMainWindow):
         if "Disconnect" in text:
             self.connect_btn.setText("Connect")
             self.port_connected = False
+            self.configurations_window_btn.hide()
             self.update_motion_toggle(0)
             self.update_tracking_toggle(0)
             self.update_stabilization_toggle(0)
+            self.stabilization_label.hide()
+            self.stabilization_toggle.hide()
+            self.tracking_label.hide()
+            self.tracking_toggle.hide()
+            self.motion_label.hide()
+            self.motion_toggle.hide()
+            self.track_video_label.hide()
             if self.temperature_timer.isActive():
                 self.temperature_timer.stop()
             self.temperature_line_edit.setText('0')
@@ -1113,15 +1128,24 @@ class MainApp(QMainWindow):
                 self.temperature_line_edit.setText(str(tmp))
                 del configs_for_win['temperature']
             if self.configs_window is None:
+                self.configurations_window_btn.show()
                 self.configs_window = ConfigurationsWindow(configs_dict=configs_for_win, ser_th=self.serial_thread)
-                self.configs_window.setGeometry(1450, 400, 400, 400)
                 self.configs_window.show()
+                self.stabilization_label.show()
+                self.stabilization_toggle.show()
+                self.tracking_label.show()
+                self.tracking_toggle.show()
+                self.motion_label.show()
+                self.motion_toggle.show()
+                self.configs_window.show()
+                self.track_video_label.show()
                 self.temperature_timer.start()
             else:
                 json_string = json.dumps(configs_for_win)
                 self.configs_window.fill_get_fields(json_string)
             self.buffer_data = self.buffer_data.replace(t, "")
             self.buffer_data = self.buffer_data.replace("[Config]", "")
+            self.buffer_data = self.buffer_data.replace(']', "")
 
         while '{' in self.buffer_data and '}' in self.buffer_data:
             ind1 = self.buffer_data.index('{')
