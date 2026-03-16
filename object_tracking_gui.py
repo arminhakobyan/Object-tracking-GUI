@@ -103,6 +103,7 @@ def write_to_serial(ser, js):
     #ser.write(bytes([0xff]))
 
 
+
 class Toggle(QCheckBox):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -184,6 +185,7 @@ class VideoCaptureThread(QThread):
 
 
 class SerialThread(QThread):
+    # serial thread for sending data and receiving
     received_data_signal = pyqtSignal(str)
     send_text_signal = pyqtSignal(str)
     send_bytes_signal = pyqtSignal(bytes)
@@ -234,11 +236,19 @@ class SerialThread(QThread):
 
                 text = buffer.decode("utf-8", errors="ignore")
                 buffer.clear()
-                self.received_data_signal.emit(text)
+                if self.running:
+                    self.received_data_signal.emit(text)
 
             except serial.SerialException:
+                if self.serial.is_open:
+                    self.serial.close()
                 break
 
+        if self.serial.is_open:
+            print("serial existing..")
+            self.serial.close()
+
+        print("serial stopped")
 
 
     def send_joystick_coord_with_interval(self, json_x, json_y):
@@ -281,7 +291,12 @@ class SerialThread(QThread):
 
     def stop(self):
         self.running = False
-        self.serial.close()
+        try:
+            if self.serial and self.serial.is_open:
+                self.serial.close()
+        except Exception as e:
+            print("Serial close error:", e)
+
         self.quit()
 
 
@@ -302,9 +317,11 @@ class MainApp(QMainWindow):
         geometry = app.desktop().availableGeometry()
         self.setGeometry(geometry)
 
+        # label for video
         self.video_label = QLabel(self)
         self.video_label_deviation = [50, 50]
         self.video_label.setGeometry(self.video_label_deviation[0], self.video_label_deviation[1], 960, 540)
+        # until there is no video, it will be gray frame
                                         # h     w    ch
         self.gray_frame = np.full((1080, 1920, 3), 128, dtype=np.uint8)    # was (1920,1080, 3) VARDAN
         self.gray_pixmap = QtGui.QPixmap(self.video_label.width(), self.video_label.height())
@@ -317,6 +334,7 @@ class MainApp(QMainWindow):
         self.video_thread.start()
         print("self.video_thread", self.video_thread)
 
+        #labels and widgets on the gui
         self.stabilization_label = QLabel('Stabilization', self)
         self.stabilization_label.setGeometry(910, 15, 100, 30)
         self.stabilization_toggle = Toggle(self)
@@ -340,6 +358,15 @@ class MainApp(QMainWindow):
         self.motion_toggle.stateChanged.connect(self.motion_on_off)
         self.motion_label.hide()
         self.motion_toggle.hide()
+
+        ###########################################
+        # optional buttons R and W - for sending letters R and W
+        self.r_btn = QPushButton("R", self)
+        self.r_btn.setGeometry(50, 10, 30, 30)
+        self.r_btn.clicked.connect(self.click_r_btn)
+        self.w_btn = QPushButton("W", self)
+        self.w_btn.setGeometry(90, 10, 30, 30)
+        self.w_btn.clicked.connect(self.click_w_btn)
 
         self.tracking_coord_label = QLabel("Number of tracking coordinates:", self)
         self.tracking_coord_label.setGeometry(800, 595, 150, 30)
@@ -396,6 +423,7 @@ class MainApp(QMainWindow):
         self.configurations_window_btn.clicked.connect(self.show_configurations)
         self.configs_window = None
 
+        # some initializations
         # buffer for point coordinates
         self.coords_buffer = deque()
 
@@ -446,15 +474,19 @@ class MainApp(QMainWindow):
         self.device_id = [i for i in range(10001, 10016)]   # 10001-10015         #1234567890
         self.device_id.append(1234567890)
 
+        # dictionary for all configuration parameters
         self.configs = {}
         self.configs_window = None
         self.first_log = True
 
+        # calculate the number of received tracking coordinates
         self.tracking_coord_count = 0
         self.receiving_tracking_coord_timer = QTimer(self)
         self.receiving_tracking_coord_timer.setInterval(10_000)  # 10 seconds
+        # update per 10 seconds
         self.receiving_tracking_coord_timer.timeout.connect(self.report_tracking_coord_count)
 
+        # temperature value - update per 10 seconds
         self.temperature_timer = QTimer(self)
         self.temperature_timer.setInterval(10_000)
         self.temperature_timer.timeout.connect(self.report_temperature)
@@ -486,6 +518,7 @@ class MainApp(QMainWindow):
         self.selected_port = 0
         self.ports_combobox.currentIndexChanged.connect(self.select_port)
 
+        # connect button for connecting to serial port
         self.connect_btn = QPushButton(self)
         self.connect_btn.setText("Connect")
         self.connect_btn.setGeometry(1700, 60, 100, 30)
@@ -507,10 +540,12 @@ class MainApp(QMainWindow):
             except Exception as e:
                 print(e)
 
+        # label for the tracking video window next to the video label
         self.track_video_label = QLabel(self)
         self.track_video_label_x = 1070
         self.track_video_label_y = 50
 
+        # draw joystcick pointer
         self.pointer = QLabel(self)
         self.pointer.setFixedSize(10, 10)  # (0, 0)
         self.pointer.setStyleSheet("background-color: red; border-radius: 5px;")
@@ -524,12 +559,13 @@ class MainApp(QMainWindow):
 
         self.joystick_thread.stopped_moving.connect(self.stop_joystick_motion)
         self.joystick_thread.button_pushed.connect(self.handle_joystick_button)
-
         self.pointer_pos = [self.video_label_deviation[0], self.video_label_deviation[1]]
 
 
 
     def keyPressEvent(self, event):
+        # H click - will apeear/disappear tracking_coord_count and temperature widgets
+        # T click - mouse will go joystick/non joystck mode
         if event.key() == Qt.Key_T:
             self.mouse_as_joystick = not self.mouse_as_joystick
             print("Mouse joystick mode:", self.mouse_as_joystick)
@@ -563,7 +599,6 @@ class MainApp(QMainWindow):
             #request param
             to_json = json.dumps({"stabilization": "%"})
             self.serial_thread.send_text_signal.emit(to_json)
-            #time.sleep(0.01)
             #will be refreshed in self.configs in the function - receive_data_from_serial
 
 
@@ -597,6 +632,7 @@ class MainApp(QMainWindow):
         self.tracking_toggle.blockSignals(True)
         self.tracking_toggle.setChecked(bool(state))
         self.tracking_toggle.blockSignals(False)
+        time.sleep(0.5)
 
 
     def motion_on_off(self, state):
@@ -619,7 +655,18 @@ class MainApp(QMainWindow):
         self.motion_toggle.blockSignals(False)
 
 
+    def click_r_btn(self):
+        #clicking R button - should send R
+        self.ser.write(bytes([0x52]))
+
+    def click_w_btn(self):
+        # clicking R button - should send W
+        self.ser.write(bytes([0x57]))
+
+
     def mousePressEvent(self, event):
+        # if mouse is in joystick mode - with lefy button you can move the pointer
+        # and with right button - it will turn on tracking, as it will with joystick button 0
         if self.mouse_as_joystick:
             if event.button() == Qt.LeftButton:
                 #self.click_on(event)
@@ -638,6 +685,8 @@ class MainApp(QMainWindow):
 
 
     def stop_joystick_motion(self, dx, dy):
+        # coordinates of joystick movement are sent with some interval, thats why when movement stops
+        # it should send the very last coordinate
         self.joystick_stopped = True
         pointer_x, pointer_y  = self.update_joystick_pointer(dx, dy)
         if self.serial_thread:
@@ -936,9 +985,14 @@ class MainApp(QMainWindow):
         except Exception as e:
             print(e)
         try:
-            self.ser = Serial(port, int(baud_rate), timeout=0, write_timeout=0.1)                 #timeout=1)
-            self.ser.close()
-            self.ser.open()
+            self.ser = Serial(port, int(baud_rate), timeout=0.01, write_timeout=0.1)                 #timeout=1)
+            #self.ser.close()
+            #self.ser.open()
+            self.ser.reset_input_buffer()
+            time.sleep(0.05)
+            self.ser.reset_input_buffer()
+            self.ser.reset_output_buffer()
+
             self.port_connected = True
             return True
         except Exception as e:
@@ -1072,40 +1126,7 @@ class MainApp(QMainWindow):
         #write_log(text=text, filename = self.log_file)
         self.buffer_log += text
         if "Disconnect" in text:
-            self.connect_btn.setText("Connect")
-            self.port_connected = False
-            self.configurations_window_btn.hide()
-            self.update_motion_toggle(0)
-            self.update_tracking_toggle(0)
-            self.update_stabilization_toggle(0)
-            self.stabilization_label.hide()
-            self.stabilization_toggle.hide()
-            self.tracking_label.hide()
-            self.tracking_toggle.hide()
-            self.motion_label.hide()
-            self.motion_toggle.hide()
-            self.track_video_label.hide()
-            if self.temperature_timer.isActive():
-                self.temperature_timer.stop()
-            self.temperature_line_edit.setText('0')
-            if self.receiving_tracking_coord_timer.isActive():
-                self.receiving_tracking_coord_timer.stop()
-            self.tracking_coord_editline.setText('0')
-            self.flush_logs()
-            self.buffer_data = ''
-            f = open(self.log_file, 'a')
-            f.close()
-            fl = open(self.coordinates_log_file, "a")
-            fl.close()
-            try:
-                self.serial_thread.stop()
-                self.serial_thread = None
-                self.ser.close()
-                print("disconnected")
-                return
-            except EOFError as e:
-                print(e)
-
+            self.disconnect()
 
         self.buffer_data += text
         print("buffer: ", self.buffer_data)
@@ -1178,8 +1199,46 @@ class MainApp(QMainWindow):
 
             except json.decoder.JSONDecodeError as e:
                 print(f"json decoding error: {sub_text}")
+                return
             except Exception as e:
                 print(f"Error: {sub_text}")
+                return
+
+    def disconnect(self):
+        self.connect_btn.setText("Connect")
+        self.port_connected = False
+        self.configurations_window_btn.hide()
+        self.update_motion_toggle(0)
+        self.update_tracking_toggle(0)
+        self.update_stabilization_toggle(0)
+        self.stabilization_label.hide()
+        self.stabilization_toggle.hide()
+        self.tracking_label.hide()
+        self.tracking_toggle.hide()
+        self.motion_label.hide()
+        self.motion_toggle.hide()
+        self.track_video_label.hide()
+        if self.temperature_timer.isActive():
+            self.temperature_timer.stop()
+        self.temperature_line_edit.setText('0')
+        if self.receiving_tracking_coord_timer.isActive():
+            self.receiving_tracking_coord_timer.stop()
+        self.tracking_coord_editline.setText('0')
+        self.flush_logs()
+        self.buffer_data = ''
+        f = open(self.log_file, 'a')
+        f.close()
+        fl = open(self.coordinates_log_file, "a")
+        fl.close()
+        try:
+            if self.serial_thread:
+                self.serial_thread.stop()
+                self.serial_thread.wait()
+                self.serial_thread = None
+                self.ser = None
+        except EOFError as e:
+            print(e)
+
 
 
     def flush_logs(self):
@@ -1265,11 +1324,9 @@ class MainApp(QMainWindow):
     def close_camera(self):
         self.camera_closed = True
         self.is_recording = False
-
         if self.video_thread:
             self.video_thread.stop()
             self.video_thread = None
-
         self.video_label.clear()
         self.video_label.setPixmap(self.gray_pixmap)
         self.track_video = None
@@ -1283,9 +1340,9 @@ class MainApp(QMainWindow):
 
     def closeEvent(self, event):
         print("closeEvent")
-        if self.serial_thread:
-            self.serial_thread.stop()
-            self.serial_thread = None
+        if self.port_connected:
+            self.connect_port()    #this will disconnet
+        time.sleep(0.5)
         self.flush_logs()
         f = open(self.log_file, 'a')
         f.close()
@@ -1296,6 +1353,8 @@ class MainApp(QMainWindow):
         self.close_camera()
         if self.configs_window:
             self.configs_window.close()
+
+        print("Application closed cleanly")
         event.accept()
 
 
@@ -1489,7 +1548,7 @@ class ConfigurationsWindow(QWidget):
             self._drag_pos = event.globalPos() - self.frameGeometry().topLeft()
 
     def mouseMoveEvent(self, event):
-        if event.buttons() & Qt.LeftButton:
+        if event.buttons() & Qt.LeftButton and self._drag_pos is not None:
             self.move(event.globalPos() - self._drag_pos)
 
     def mouseReleaseEvent(self, event):
