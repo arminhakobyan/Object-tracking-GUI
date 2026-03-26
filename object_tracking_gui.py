@@ -244,7 +244,7 @@ class SerialThread(QThread):
                     self.serial.close()
                 break
 
-        if self.serial.is_open:
+        if self.serial and self.serial.is_open:
             print("serial existing..")
             self.serial.close()
 
@@ -607,6 +607,7 @@ class MainApp(QMainWindow):
         self.stabilization_toggle.blockSignals(True)
         self.stabilization_toggle.setChecked(bool(state))
         self.stabilization_toggle.blockSignals(False)
+        time.sleep(0.01)
 
 
     def tracking_on_off(self, state):
@@ -632,7 +633,7 @@ class MainApp(QMainWindow):
         self.tracking_toggle.blockSignals(True)
         self.tracking_toggle.setChecked(bool(state))
         self.tracking_toggle.blockSignals(False)
-        time.sleep(0.5)
+        time.sleep(0.01)
 
 
     def motion_on_off(self, state):
@@ -653,6 +654,7 @@ class MainApp(QMainWindow):
         self.motion_toggle.blockSignals(True)
         self.motion_toggle.setChecked(bool(state))
         self.motion_toggle.blockSignals(False)
+        time.sleep(0.01)
 
 
     def click_r_btn(self):
@@ -848,7 +850,7 @@ class MainApp(QMainWindow):
 
     @pyqtSlot(np.ndarray)
     def update_frame(self, frame):
-        if self.video_thread is not None:
+        if self.port_connected and self.video_thread is not None:
             self.original_frame_shape = frame.shape  # height-Y, width-X, ch - BGR
             frame = cv2.resize(frame, (self.resized_frame_shape[1], self.resized_frame_shape[0]))  #dsize = (new_width, new_height)
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -861,28 +863,36 @@ class MainApp(QMainWindow):
             self.scale_y = self.original_frame_shape[0] / self.resized_frame_shape[0]  # height           frame_shape[0]=height
             x = 0
             y = 0
-            if self.configs_window:
-                x = self.configs['track_x'] / self.scale_x
-                y = self.configs['track_y'] / self.scale_y
+            try:
+                if self.configs_window and len(self.configs) > 2:
+                    #print(f"self.configs- {self.configs}")
+                    x = self.configs['track_x'] / self.scale_x
+                    y = self.configs['track_y'] / self.scale_y
 
-                ui_stab_state = self.stabilization_toggle.isChecked()
-                configs_stab = self.configs['stabilization']
-                if bool(configs_stab) != ui_stab_state:
-                    self.update_stabilization_toggle(configs_stab)
+                    ui_stab_state = self.stabilization_toggle.isChecked()
+                    configs_stab = self.configs['stabilization']
+                    if bool(configs_stab) != ui_stab_state:
+                        self.update_stabilization_toggle(configs_stab)
 
-                ui_track_state = self.tracking_toggle.isChecked()
-                configs_track = self.configs['tracking']
-                if bool(configs_track) != ui_track_state:
-                    self.update_tracking_toggle(configs_track)
-                if bool(configs_track) and not self.receiving_tracking_coord_timer.isActive():
-                    self.tracking_coord_count = 0
-                    self.receiving_tracking_coord_timer.start()
+                    ui_track_state = self.tracking_toggle.isChecked()
+                    configs_track = self.configs['tracking']
+                    if bool(configs_track) != ui_track_state:
+                        self.update_tracking_toggle(configs_track)
+                    if bool(configs_track) and not self.receiving_tracking_coord_timer.isActive():
+                        self.tracking_coord_count = 0
+                        self.receiving_tracking_coord_timer.start()
 
-                ui_motion_state = self.motion_toggle.isChecked()
+                    ui_motion_state = self.motion_toggle.isChecked()
 
-                motion_track = self.configs['motion_det']
-                if bool(motion_track) != ui_motion_state:
-                    self.update_motion_toggle(motion_track)
+                    motion_track = self.configs['motion_det']
+                    if bool(motion_track) != ui_motion_state:
+                        self.update_motion_toggle(motion_track)
+            except Exception as e:
+                print("Unexpected error:", e)
+                return
+                #QMessageBox.critical(self, "Error", "Invalid response from device.")
+                #if self.ser and self.ser.is_open:
+                #    self.ser.close()
 
             if self.configs and x and y:
                 track_windw_size = self.configs['track_wndw_size']
@@ -936,13 +946,17 @@ class MainApp(QMainWindow):
         if len(self.recorded_frames) == 0:
             return
 
+        # get the FPS from camera
+        fps = self.video_thread.video_capture.get(cv2.CAP_PROP_FPS)  # 30 ??
+        print(f"fps of the camera - {fps}")
+
         filename, _ = QFileDialog.getSaveFileName(self, "Save Video", "", "mp4 Files (*.mp4v)")   # (*.mp4v)
         if filename:
             fshape = self.recorded_frames[0].shape
             fheight = int(fshape[0])
             fwidth = int(fshape[1])
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')        # (*.mp4v)
-            self.video_writer = cv2.VideoWriter(filename, fourcc, 15, (fwidth, fheight), True)
+            self.video_writer = cv2.VideoWriter(filename=filename, fourcc=fourcc, fps=5, frameSize=(fwidth, fheight), isColor=True)
             for frame in self.recorded_frames:
                 self.video_writer.write(frame)
             self.video_writer.release()
@@ -1125,7 +1139,7 @@ class MainApp(QMainWindow):
             self.first_log = False
         #write_log(text=text, filename = self.log_file)
         self.buffer_log += text
-        if "Disconnect" in text:
+        if "Disconnected" in text:
             self.disconnect()
 
         self.buffer_data += text
@@ -1138,35 +1152,38 @@ class MainApp(QMainWindow):
 
             self.configs = json.loads(t)
             configs_for_win = copy.copy(self.configs)
-            if 'tracking' in configs_for_win:
-                del configs_for_win['tracking']
-            if 'stabilization' in configs_for_win:
-                del configs_for_win['stabilization']
-            if 'motion_det' in configs_for_win:
-                del configs_for_win['motion_det']
-            if 'temperature' in configs_for_win:
-                tmp = round(configs_for_win['temperature'])
-                self.temperature_line_edit.setText(str(tmp))
-                del configs_for_win['temperature']
-            if self.configs_window is None:
-                self.configurations_window_btn.show()
-                self.configs_window = ConfigurationsWindow(configs_dict=configs_for_win, ser_th=self.serial_thread)
-                self.configs_window.show()
-                self.stabilization_label.show()
-                self.stabilization_toggle.show()
-                self.tracking_label.show()
-                self.tracking_toggle.show()
-                self.motion_label.show()
-                self.motion_toggle.show()
-                self.configs_window.show()
-                self.track_video_label.show()
-                self.temperature_timer.start()
-            else:
-                json_string = json.dumps(configs_for_win)
-                self.configs_window.fill_get_fields(json_string)
-            self.buffer_data = self.buffer_data.replace(t, "")
-            self.buffer_data = self.buffer_data.replace("[Config]", "")
-            self.buffer_data = self.buffer_data.replace(']', "")
+            if self.buffer_data.index('[Config]') < st:
+                if 'tracking' in configs_for_win:
+                    del configs_for_win['tracking']
+                if 'stabilization' in configs_for_win:
+                    del configs_for_win['stabilization']
+                if 'motion_det' in configs_for_win:
+                    del configs_for_win['motion_det']
+                if 'temperature' in configs_for_win:
+                    tmp = round(configs_for_win['temperature'])
+                    self.temperature_line_edit.setText(str(tmp))
+                    del configs_for_win['temperature']
+                if self.configs_window is None:
+                    self.configurations_window_btn.show()
+                    self.configs_window = ConfigurationsWindow(configs_dict=configs_for_win, ser_th=self.serial_thread)
+                    self.configs_window.show()
+                    self.stabilization_label.show()
+
+                    self.stabilization_toggle.show()
+                    self.tracking_label.show()
+                    self.tracking_toggle.show()
+                    self.motion_label.show()
+                    self.motion_toggle.show()
+                    self.configs_window.show()
+                    self.track_video_label.show()
+                    self.temperature_timer.start()
+                else:
+                    json_string = json.dumps(configs_for_win)
+                    self.configs_window.fill_get_fields(json_string)
+
+                self.buffer_data = self.buffer_data.replace(t, "")
+                self.buffer_data = self.buffer_data.replace("[Config]", "")
+                self.buffer_data = self.buffer_data.replace(']', "")
 
         while '{' in self.buffer_data and '}' in self.buffer_data:
             ind1 = self.buffer_data.index('{')
@@ -1204,7 +1221,9 @@ class MainApp(QMainWindow):
                 print(f"Error: {sub_text}")
                 return
 
+
     def disconnect(self):
+        print("disconnect()")
         self.connect_btn.setText("Connect")
         self.port_connected = False
         self.configurations_window_btn.hide()
@@ -1448,6 +1467,11 @@ class ConfigurationsWindow(QWidget):
 
                 self.layout.addLayout(parameters_layout)
 
+            self.set_values_in_input_fields(fields=self.get_fields, configs=self.buffer_configs)
+            self.set_values_in_input_fields(fields=self.set_fields, configs=self.buffer_configs)
+        else:
+            QMessageBox.critical(self, "Problem", "No config parameters")
+
 
         self.track_frame_size = [0, 0]
         self.track_coord_x = None
@@ -1469,8 +1493,7 @@ class ConfigurationsWindow(QWidget):
         self.apply_btn.clicked.connect(self.on_apply_click)
 
         self.setLayout(self.layout)
-        self.set_values_in_input_fields(fields = self.get_fields, configs = self.buffer_configs)
-        self.set_values_in_input_fields(fields = self.set_fields, configs = self.buffer_configs)
+
         #self.timer.start(8000)
 
 
